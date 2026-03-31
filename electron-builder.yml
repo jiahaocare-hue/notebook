@@ -1,0 +1,48 @@
+appId: com.taskmanager.app
+productName: 任务管理器
+copyright: Copyright © 2024
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - "!**/*.ts"
+  - "!**/*.map"
+
+extraResources:
+  - from: resources
+    to: resources
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 任务管理器
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  icon: resources/icon.icns
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  icon: resources/icons
+
+publish: null
