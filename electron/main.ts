@@ -466,7 +466,7 @@ ipcMain.handle('task:list', (_event, filters?: { date?: string; status?: string;
   const params: string[] = []
 
   if (filters?.date) {
-    sql += " AND date(due_date) = ?"
+    sql += " AND date(created_at, 'localtime') = ?"
     params.push(filters.date)
   }
 
@@ -476,12 +476,12 @@ ipcMain.handle('task:list', (_event, filters?: { date?: string; status?: string;
   }
 
   if (filters?.startDate) {
-    sql += " AND date(due_date) >= ?"
+    sql += " AND date(created_at, 'localtime') >= ?"
     params.push(filters.startDate)
   }
 
   if (filters?.endDate) {
-    sql += " AND date(due_date) <= ?"
+    sql += " AND date(created_at, 'localtime') <= ?"
     params.push(filters.endDate)
   }
 
