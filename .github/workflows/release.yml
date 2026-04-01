@@ -24,34 +24,29 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: task-manager/package-lock.json
 
       - name: Install dependencies
-        working-directory: task-manager
         run: npm ci
 
       - name: Build Electron app
-        working-directory: task-manager
         run: npm run electron:build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get version
         id: version
-        working-directory: task-manager
         run: |
           $version = node -p "require('./package.json').version"
           echo "version=$version" >> $env:GITHUB_OUTPUT
-          echo "version=v$version" >> $env:GITHUB_OUTPUT
+          echo "versionTag=v$version" >> $env:GITHUB_OUTPUT
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
           path: |
-            task-manager/release/*.exe
-            task-manager/release/*.yml
+            release/*.exe
+            release/*.yml
           retention-days: 30
 
   release:
@@ -75,7 +70,7 @@ jobs:
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           else
-            echo "version=v$(node -p "require('./task-manager/package.json').version")" >> $GITHUB_OUTPUT
+            echo "version=v$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
           fi
 
       - name: Create Release
