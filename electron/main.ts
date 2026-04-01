@@ -10,6 +10,7 @@ import { autoUpdater } from 'electron-updater'
 let mainWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
 let manualUpdateCheck = false
+const isDev = !app.isPackaged
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -26,8 +27,6 @@ function createWindow() {
     show: false,
     focusable: true,
   })
-
-  const isDev = !app.isPackaged
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
@@ -97,7 +96,6 @@ function getDataDir(): string {
     return config.dataDir
   }
   
-  const isDev = !app.isPackaged
   if (isDev) {
     return path.join(__dirname, '..', 'data')
   }
@@ -1016,7 +1014,6 @@ ipcMain.handle('app:getVersion', () => {
 })
 
 ipcMain.handle('app:checkForUpdates', async () => {
-  const isDev = !app.isPackaged
   if (isDev) {
     dialog.showMessageBox(mainWindow!, {
       type: 'info',
