@@ -68,3 +68,49 @@ export interface SearchResult<T> {
   error?: string
   tasks: T[]
 }
+
+export interface TaskStats {
+  total: number
+  completed: number
+  inProgress: number
+  pending: number
+  cancelled: number
+  completionRate: number
+  avgCompletionTime?: number
+  priorityDistribution: {
+    high: number
+    medium: number
+    low: number
+  }
+  monthlyDistribution: { month: string; count: number }[]
+}
+
+export interface TaskHistoryItem {
+  action: string
+  oldValue: string | null
+  newValue: string | null
+  timestamp: string
+}
+
+export interface CompletedTask {
+  title: string
+  description: string | null
+  priority: string
+  status: string
+  dueDate?: string | null
+  createdAt?: string
+  completedAt?: string
+  history?: TaskHistoryItem[]
+}
+
+export interface SummaryRequest {
+  stats: TaskStats
+  completedTasks: CompletedTask[]
+  timeRange?: {
+    startDate: string
+    endDate: string
+  }
+  summaryType?: 'weekly' | 'yearly'
+  pendingTasks?: CompletedTask[]
+  inProgressTasks?: CompletedTask[]
+}

@@ -43,6 +43,10 @@ linux:
     - target: AppImage
       arch:
         - x64
-  icon: resources/icons
+      icon: resources/icons
 
-publish: null
+publish:
+  provider: github
+  owner: jiahaocare-hue
+  repo: notebook
+  releaseType: release

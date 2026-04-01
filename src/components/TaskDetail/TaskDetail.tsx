@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { Task, TaskHistory } from '../../types'
-import { imageApi, taskApi } from '../../ipc/tasks'
+import { imageApi, taskApi, clipboardApi } from '../../ipc/tasks'
 import { DatePicker } from '../DatePicker'
 
 interface TaskDetailProps {
@@ -16,6 +16,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
 }) => {
   const [newContent, setNewContent] = useState('')
   const [previewImage, setPreviewImage] = useState<string | null>(null)
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle')
   const fileInputRef = useRef<HTMLInputElement>(null)
   
   const [history, setHistory] = useState<TaskHistory[]>([])
@@ -161,6 +162,25 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
+  }
+
+  const handleCopyImage = async () => {
+    if (!previewImage) return
+    
+    try {
+      const result = await clipboardApi.writeImage(previewImage)
+      if (result.success) {
+        setCopyStatus('success')
+      } else {
+        setCopyStatus('error')
+      }
+    } catch {
+      setCopyStatus('error')
+    }
+    
+    setTimeout(() => {
+      setCopyStatus('idle')
+    }, 2000)
   }
 
   return (
@@ -405,7 +425,10 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
       {previewImage && (
         <div 
           className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
-          onClick={() => setPreviewImage(null)}
+          onClick={() => {
+            setPreviewImage(null)
+            setCopyStatus('idle')
+          }}
         >
           <img 
             src={previewImage} 
@@ -413,8 +436,32 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
             className="max-w-[90vw] max-h-[90vh] object-contain"
           />
           <button
+            className="absolute top-4 left-4 text-white hover:text-gray-300 p-2"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleCopyImage()
+            }}
+            title="复制图片"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </button>
+          {copyStatus !== 'idle' && (
+            <div 
+              className={`absolute top-4 left-16 px-3 py-1 rounded text-sm ${
+                copyStatus === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+              }`}
+            >
+              {copyStatus === 'success' ? '复制成功' : '复制失败'}
+            </div>
+          )}
+          <button
             className="absolute top-4 right-4 text-white hover:text-gray-300"
-            onClick={() => setPreviewImage(null)}
+            onClick={() => {
+              setPreviewImage(null)
+              setCopyStatus('idle')
+            }}
           >
             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

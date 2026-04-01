@@ -3,11 +3,12 @@ import { MainLayout } from './components/Layout'
 import { TodayTasks } from './pages/TodayTasks'
 import { Search } from './pages/Search'
 import { CalendarPage } from './pages/Calendar'
+import { Summary } from './pages/Summary'
 import { SettingsModal } from './components/Settings'
 import { TaskProvider, useTaskContext } from './context/TaskContext'
 import { StatusFilter, DateFilter } from './types'
 
-type PageType = 'tasks' | 'search' | 'calendar'
+type PageType = 'tasks' | 'search' | 'calendar' | 'summary'
 
 function AppContent() {
   const [currentPage, setCurrentPage] = useState<PageType>('tasks')
@@ -101,6 +102,8 @@ function AppContent() {
         return <CalendarPage />
       case 'search':
         return <Search />
+      case 'summary':
+        return <Summary />
       default:
         return null
     }

@@ -1,4 +1,4 @@
-import { Task, NewTask, UpdateTask, TaskHistory, TaskFilters, SearchMode, SearchOptions } from '../types'
+import { Task, NewTask, UpdateTask, TaskHistory, TaskFilters, SearchMode, SearchOptions, SummaryRequest } from '../types'
 
 declare global {
   interface Window {
@@ -24,6 +24,14 @@ declare global {
       openDirectoryDialog: () => Promise<{ canceled: boolean; filePath: string | null }>
       focusWindow: () => Promise<boolean>
       showConfirmDialog: (message: string) => Promise<boolean>
+      getLlmConfig: () => Promise<{ apiKey: string | null; baseUrl: string | null; model: string | null; timeout: number; verifySSL: boolean; promptTemplate: string | null }>
+      setLlmConfig: (config: { apiKey?: string; baseUrl?: string; model?: string; timeout?: number; verifySSL?: boolean; promptTemplate?: string }) => Promise<{ success: boolean; error?: string }>
+      generateSummary: (request: SummaryRequest) => Promise<{ success: boolean; summary?: string; error?: string }>
+      saveFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: string }) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
+      saveBinaryFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: number[] }) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
+      writeImageToClipboard: (imageData: string) => Promise<{ success: boolean; error?: string }>
+      getAppVersion: () => Promise<string>
+      checkForUpdates: () => Promise<{ success: boolean; error?: string }>
     }
   }
 }
@@ -132,5 +140,44 @@ export const imageApi = {
     if (!api) throw new Error('electronAPI not available')
     const result = await api.deleteImage(imagePath)
     return result.success
+  },
+}
+
+export const llmApi = {
+  getConfig: async (): Promise<{ apiKey: string | null; baseUrl: string | null; model: string | null; timeout: number; verifySSL: boolean; promptTemplate: string | null }> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getLlmConfig()
+  },
+  setConfig: async (config: { apiKey?: string; baseUrl?: string; model?: string; timeout?: number; verifySSL?: boolean; promptTemplate?: string }): Promise<{ success: boolean; error?: string }> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.setLlmConfig(config)
+  },
+  generateSummary: async (request: SummaryRequest): Promise<{ success: boolean; summary?: string; error?: string }> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.generateSummary(request)
+  },
+}
+
+export const clipboardApi = {
+  writeImage: async (imageData: string): Promise<{ success: boolean; error?: string }> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.writeImageToClipboard(imageData)
+  },
+}
+
+export const appApi = {
+  getVersion: async (): Promise<string> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getAppVersion()
+  },
+  checkForUpdates: async (): Promise<{ success: boolean; error?: string }> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.checkForUpdates()
   },
 }

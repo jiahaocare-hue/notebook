@@ -1,12 +1,15 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, clipboard, nativeImage, dialog, shell } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import Database from 'better-sqlite3'
 import { generateEmbedding, cosineSimilarity } from './services/embedding'
 import { extractText } from './services/ocr'
+import { generateSummary, SummaryRequest } from './services/llm'
+import { autoUpdater } from 'electron-updater'
 
 let mainWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
+let manualUpdateCheck = false
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -50,7 +53,21 @@ function getConfigPath(): string {
   return path.join(userDataPath, 'config.json')
 }
 
-function loadConfig(): { dataDir?: string } {
+interface LLMConfig {
+  apiKey?: string
+  baseUrl?: string
+  model?: string
+  timeout?: number
+  verifySSL?: boolean
+  promptTemplate?: string
+}
+
+interface AppConfig {
+  dataDir?: string
+  llm?: LLMConfig
+}
+
+function loadConfig(): AppConfig {
   try {
     const configPath = getConfigPath()
     if (fs.existsSync(configPath)) {
@@ -63,7 +80,7 @@ function loadConfig(): { dataDir?: string } {
   return {}
 }
 
-function saveConfig(config: { dataDir?: string }): boolean {
+function saveConfig(config: AppConfig): boolean {
   try {
     const configPath = getConfigPath()
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
@@ -252,6 +269,55 @@ app.whenReady().then(async () => {
   await backfillEmbeddings()
   await backfillImageTexts()
   createWindow()
+
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('update-available', (info) => {
+    dialog.showMessageBox(mainWindow!, {
+      type: 'info',
+      title: '发现新版本',
+      message: `发现新版本 ${info.version}，是否前往下载？`,
+      buttons: ['前往下载', '稍后提醒'],
+      defaultId: 0,
+      cancelId: 1
+    }).then((result) => {
+      if (result.response === 0) {
+        shell.openExternal('https://github.com/jiahaocare-hue/notebook/releases/latest')
+      }
+    })
+  })
+
+  autoUpdater.on('update-not-available', () => {
+    if (manualUpdateCheck) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'info',
+        title: '检查更新',
+        message: '当前已是最新版本',
+        buttons: ['确定']
+      })
+      manualUpdateCheck = false
+    }
+  })
+
+  autoUpdater.on('error', (error) => {
+    console.error('Auto updater error:', error)
+    if (manualUpdateCheck) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'error',
+        title: '检查更新失败',
+        message: '检查更新时发生错误，请稍后重试',
+        buttons: ['确定']
+      })
+      manualUpdateCheck = false
+    }
+  })
+
+  if (!isDev) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates()
+    }, 3000)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -822,4 +888,151 @@ ipcMain.handle('dialog:confirm', async (_event, message: string) => {
     message: message
   })
   return result.response === 1
+})
+
+ipcMain.handle('llm:getConfig', () => {
+  const config = loadConfig()
+  return {
+    apiKey: config.llm?.apiKey || null,
+    baseUrl: config.llm?.baseUrl || null,
+    model: config.llm?.model || null,
+    timeout: config.llm?.timeout || 30,
+    verifySSL: config.llm?.verifySSL !== false,
+    promptTemplate: config.llm?.promptTemplate || null
+  }
+})
+
+ipcMain.handle('llm:setConfig', (_event, llmConfig: { apiKey?: string; baseUrl?: string; model?: string; timeout?: number; verifySSL?: boolean; promptTemplate?: string }) => {
+  try {
+    const config = loadConfig()
+    config.llm = {
+      ...config.llm,
+      ...llmConfig
+    }
+    const saved = saveConfig(config)
+    return { success: saved }
+  } catch (error) {
+    console.error('Failed to set LLM config:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to set LLM config' }
+  }
+})
+
+ipcMain.handle('llm:generateSummary', async (_event, request: SummaryRequest) => {
+  try {
+    const config = loadConfig()
+    
+    if (!config.llm?.apiKey || !config.llm?.baseUrl) {
+      return { 
+        success: false, 
+        error: '请先配置 LLM API Key 和 Base URL' 
+      }
+    }
+
+    const summary = await generateSummary(
+      {
+        apiKey: config.llm.apiKey,
+        baseUrl: config.llm.baseUrl,
+        model: config.llm.model,
+        timeout: config.llm.timeout,
+        verifySSL: config.llm.verifySSL,
+        promptTemplate: config.llm.promptTemplate,
+      },
+      request
+    )
+    
+    return { success: true, summary }
+  } catch (error) {
+    console.error('Failed to generate summary:', error)
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to generate summary' 
+    }
+  }
+})
+
+ipcMain.handle('file:save', async (_event, options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: string }) => {
+  const { dialog } = await import('electron')
+  
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    defaultPath: options.defaultPath,
+    filters: options.filters,
+    title: '保存文件'
+  })
+  
+  if (result.canceled || !result.filePath) {
+    return { success: false, cancelled: true }
+  }
+  
+  try {
+    fs.writeFileSync(result.filePath, options.content, 'utf-8')
+    return { success: true, filePath: result.filePath }
+  } catch (error) {
+    console.error('Failed to save file:', error)
+    return { success: false, error: error instanceof Error ? error.message : '保存文件失败' }
+  }
+})
+
+ipcMain.handle('file:saveBinary', async (_event, options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: number[] }) => {
+  const { dialog } = await import('electron')
+  
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    defaultPath: options.defaultPath,
+    filters: options.filters,
+    title: '保存文件'
+  })
+  
+  if (result.canceled || !result.filePath) {
+    return { success: false, cancelled: true }
+  }
+  
+  try {
+    const buffer = Buffer.from(options.content)
+    fs.writeFileSync(result.filePath, buffer)
+    return { success: true, filePath: result.filePath }
+  } catch (error) {
+    console.error('Failed to save binary file:', error)
+    return { success: false, error: error instanceof Error ? error.message : '保存文件失败' }
+  }
+})
+
+ipcMain.handle('clipboard:writeImage', (_event, imageData: string) => {
+  try {
+    const image = nativeImage.createFromDataURL(imageData)
+    
+    if (image.isEmpty()) {
+      return { success: false, error: '无法创建图片' }
+    }
+    
+    clipboard.writeImage(image)
+    return { success: true }
+  } catch (error) {
+    console.error('Failed to write image to clipboard:', error)
+    return { success: false, error: error instanceof Error ? error.message : '复制图片失败' }
+  }
+})
+
+ipcMain.handle('app:getVersion', () => {
+  return app.getVersion()
+})
+
+ipcMain.handle('app:checkForUpdates', async () => {
+  const isDev = !app.isPackaged
+  if (isDev) {
+    dialog.showMessageBox(mainWindow!, {
+      type: 'info',
+      title: '检查更新',
+      message: '开发模式下无法检查更新',
+      buttons: ['确定']
+    })
+    return { success: false, error: '开发模式下无法检查更新' }
+  }
+  
+  manualUpdateCheck = true
+  try {
+    await autoUpdater.checkForUpdates()
+    return { success: true }
+  } catch (error) {
+    manualUpdateCheck = false
+    return { success: false, error: error instanceof Error ? error.message : '检查更新失败' }
+  }
 })

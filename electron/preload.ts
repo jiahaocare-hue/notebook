@@ -65,6 +65,41 @@ export interface SearchResult<T> {
   tasks: T[]
 }
 
+export interface TaskStats {
+  total: number
+  completed: number
+  inProgress: number
+  pending: number
+  cancelled: number
+  completionRate: number
+  avgCompletionTime?: number
+  priorityDistribution: {
+    high: number
+    medium: number
+    low: number
+  }
+  monthlyDistribution: { month: string; count: number }[]
+}
+
+export interface CompletedTask {
+  title: string
+  description: string | null
+  priority: string
+  completedAt?: string
+}
+
+export interface SummaryRequest {
+  stats: TaskStats
+  completedTasks: CompletedTask[]
+  timeRange?: {
+    startDate: string
+    endDate: string
+  }
+  summaryType?: 'weekly' | 'yearly'
+  pendingTasks?: CompletedTask[]
+  inProgressTasks?: CompletedTask[]
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   createTask: (task: NewTask): Promise<number> => ipcRenderer.invoke('task:create', task),
   updateTask: (taskId: number, task: UpdateTask): Promise<boolean> => ipcRenderer.invoke('task:update', taskId, task),
@@ -92,4 +127,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openDirectoryDialog: (): Promise<{ canceled: boolean; filePath: string | null }> => ipcRenderer.invoke('dialog:openDirectory'),
   focusWindow: (): Promise<boolean> => ipcRenderer.invoke('window:focus'),
   showConfirmDialog: (message: string): Promise<boolean> => ipcRenderer.invoke('dialog:confirm', message),
+
+  getLlmConfig: (): Promise<{ apiKey: string | null; baseUrl: string | null; model: string | null; timeout: number; verifySSL: boolean; promptTemplate: string | null }> => ipcRenderer.invoke('llm:getConfig'),
+  setLlmConfig: (config: { apiKey?: string; baseUrl?: string; model?: string; timeout?: number; verifySSL?: boolean; promptTemplate?: string }): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('llm:setConfig', config),
+  generateSummary: (request: SummaryRequest): Promise<{ success: boolean; summary?: string; error?: string }> => ipcRenderer.invoke('llm:generateSummary', request),
+
+  saveFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: string }): Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }> => ipcRenderer.invoke('file:save', options),
+  saveBinaryFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: number[] }): Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }> => ipcRenderer.invoke('file:saveBinary', options),
+
+  writeImageToClipboard: (imageData: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('clipboard:writeImage', imageData),
+
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
+  checkForUpdates: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('app:checkForUpdates'),
 })

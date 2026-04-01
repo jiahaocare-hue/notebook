@@ -2,8 +2,8 @@ import React, { memo } from 'react'
 import { StatusFilter, DateFilter } from '../../types'
 
 interface SidebarProps {
-  activeNav: 'tasks' | 'search' | 'calendar'
-  onNavChange: (nav: 'tasks' | 'search' | 'calendar') => void
+  activeNav: 'tasks' | 'search' | 'calendar' | 'summary'
+  onNavChange: (nav: 'tasks' | 'search' | 'calendar' | 'summary') => void
   statusFilter: StatusFilter
   onStatusFilterChange: (filter: StatusFilter) => void
   dateFilter: DateFilter
@@ -47,6 +47,16 @@ const CalendarIcon = () => (
   </svg>
 )
 
+const SummaryIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="16" y1="13" x2="8" y2="13" />
+    <line x1="16" y1="17" x2="8" y2="17" />
+    <polyline points="10 9 9 9 8 9" />
+  </svg>
+)
+
 const statusColors = {
   all: { bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400', activeBg: 'bg-slate-200' },
   pending: { bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-400', activeBg: 'bg-amber-100' },
@@ -69,6 +79,7 @@ const Sidebar: React.FC<SidebarProps> = memo(({
     { id: 'tasks' as const, label: '任务列表', icon: TasksIcon },
     { id: 'calendar' as const, label: '日历', icon: CalendarIcon },
     { id: 'search' as const, label: '搜索', icon: SearchIcon },
+    { id: 'summary' as const, label: '年度总结', icon: SummaryIcon },
   ]
 
   const dateItems: { id: DateFilter; label: string }[] = [
