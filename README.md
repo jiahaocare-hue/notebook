@@ -4,6 +4,8 @@
 
 <img width="1482" height="953" alt="Snipaste_2026-04-03_00-01-05" src="https://github.com/user-attachments/assets/658c1f46-8b4a-4a8b-8b80-40d2a97f8757" />
 
+安装包下载地址：
+https://github.com/jiahaocare-hue/notebook/releases
 
 ## 功能特性
 
