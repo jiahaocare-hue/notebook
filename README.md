@@ -2,6 +2,9 @@
 
 一个功能丰富的桌面任务管理应用，基于 Electron + React + TypeScript + Vite 构建，支持智能搜索、图片 OCR、语义搜索和 LLM 摘要生成。
 
+<img width="1482" height="953" alt="Snipaste_2026-04-03_00-01-05" src="https://github.com/user-attachments/assets/658c1f46-8b4a-4a8b-8b80-40d2a97f8757" />
+
+
 ## 功能特性
 
 ### 任务管理
