@@ -1,6 +1,6 @@
 {
   "name": "task-manager",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Electron + React + TypeScript + Vite Task Manager Application",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -64,7 +64,9 @@
       {
         "from": "resources",
         "to": "resources",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
