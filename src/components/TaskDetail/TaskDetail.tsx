@@ -578,12 +578,8 @@ const TaskDescription: React.FC<{ description: string; onImageClick: (url: strin
   const [loading, setLoading] = useState(true)
   const [ocrInfo, setOcrInfo] = useState<Map<string, ImageOCRInfo>>(new Map())
   const [retrying, setRetrying] = useState<string | null>(null)
-  const loadedRef = useRef(false)
 
   useEffect(() => {
-    if (loadedRef.current) return
-    loadedRef.current = true
-
     const loadImages = async () => {
       try {
         setLoading(true)
