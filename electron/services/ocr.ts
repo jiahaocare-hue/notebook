@@ -10,6 +10,13 @@ const MODEL_FILES = [
   { name: 'eng.traineddata', url: 'https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata' }
 ]
 
+export interface OCRResult {
+  success: boolean
+  text: string
+  error?: string
+  timestamp: string
+}
+
 function getTessDataPath(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'tessdata')
@@ -18,8 +25,12 @@ function getTessDataPath(): string {
 }
 
 function sendProgress(window: BrowserWindow | null, status: string, progress: number, message: string) {
-  if (window) {
-    window.webContents.send('ocr:download-progress', { status, progress, message })
+  if (window && !window.isDestroyed()) {
+    try {
+      window.webContents.send('ocr:download-progress', { status, progress, message })
+    } catch (e) {
+      console.error('Failed to send OCR progress:', e)
+    }
   }
 }
 
@@ -98,7 +109,9 @@ async function ensureModelsExist(window: BrowserWindow | null): Promise<string> 
   return tessDataPath
 }
 
-export async function extractText(imagePath: string, window: BrowserWindow | null = null): Promise<string> {
+export async function extractText(imagePath: string, window: BrowserWindow | null = null): Promise<OCRResult> {
+  const timestamp = new Date().toISOString()
+  
   try {
     const absolutePath = path.isAbsolute(imagePath) 
       ? imagePath 
@@ -106,7 +119,12 @@ export async function extractText(imagePath: string, window: BrowserWindow | nul
     
     if (!fs.existsSync(absolutePath)) {
       console.error('Image file not found:', absolutePath)
-      return ''
+      return {
+        success: false,
+        text: '',
+        error: 'Image file not found',
+        timestamp
+      }
     }
 
     console.log('Starting OCR for:', absolutePath)
@@ -114,27 +132,50 @@ export async function extractText(imagePath: string, window: BrowserWindow | nul
     const tessDataPath = await ensureModelsExist(window)
     console.log('Using tessdata path:', tessDataPath)
     
-    const langPath = path.dirname(tessDataPath)
-    
-    const result = await Tesseract.recognize(absolutePath, 'chi_sim+eng', {
-      logger: (m: { status: string; progress: number }) => {
-        if (m.status === 'recognizing text') {
-          const progress = Math.round(m.progress * 100)
-          sendProgress(window, 'recognizing', progress, `正在识别文字: ${progress}%`)
+    let result
+    try {
+      const worker = await Tesseract.createWorker('chi_sim+eng', undefined, {
+        langPath: tessDataPath,
+        cachePath: tessDataPath,
+        gzip: false,
+        logger: (m: { status: string; progress: number }) => {
+          if (m.status === 'recognizing text') {
+            const progress = Math.round(m.progress * 100)
+            sendProgress(window, 'recognizing', progress, `正在识别文字: ${progress}%`)
+          }
         }
-      },
-      langPath: langPath,
-      cachePath: langPath,
-      dataPath: langPath,
-      gzip: false
-    })
+      })
+      
+      await worker.load()
+      result = await worker.recognize(absolutePath)
+      await worker.terminate()
+    } catch (tesseractError) {
+      console.error('Tesseract worker error:', tesseractError)
+      return {
+        success: false,
+        text: '',
+        error: `OCR worker 初始化失败: ${tesseractError instanceof Error ? tesseractError.message : 'Unknown error'}`,
+        timestamp
+      }
+    }
 
     console.log('OCR completed for:', absolutePath)
     sendProgress(window, 'complete', 100, '识别完成')
-    return result.data.text.trim()
+    
+    return {
+      success: true,
+      text: result.data.text.trim(),
+      timestamp
+    }
   } catch (error) {
     console.error('OCR failed:', error)
     sendProgress(window, 'error', 0, 'OCR 识别失败')
-    return ''
+    
+    return {
+      success: false,
+      text: '',
+      error: error instanceof Error ? error.message : 'Unknown error',
+      timestamp
+    }
   }
 }

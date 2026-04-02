@@ -1,12 +1,49 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { Task, TaskHistory } from '../../types'
-import { imageApi, taskApi, clipboardApi } from '../../ipc/tasks'
+import { imageApi, taskApi, clipboardApi, ocrApi } from '../../ipc/tasks'
 import { DatePicker } from '../DatePicker'
 
 interface OcrProgress {
   status: string
   progress: number
   message: string
+}
+
+const OcrProgressBar = React.memo<{ progress: OcrProgress | null; showComplete: boolean }>(({ progress, showComplete }) => {
+  if (!progress && !showComplete) return null
+  
+  return (
+    <div className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-all duration-300 ${
+      progress?.status === 'downloading' || progress?.status === 'recognizing' 
+        ? 'bg-blue-50 text-blue-700' 
+        : showComplete
+          ? 'bg-green-50 text-green-600'
+          : 'bg-red-50 text-red-600'
+    }`}>
+      {progress?.status === 'downloading' || progress?.status === 'recognizing' ? (
+        <>
+          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+          <span>{progress.message}</span>
+          <span className="text-blue-500">({progress.progress}%)</span>
+        </>
+      ) : (
+        <span>{progress?.message || '识别完成'}</span>
+      )}
+    </div>
+  )
+})
+
+OcrProgressBar.displayName = 'OcrProgressBar'
+
+interface ImageOCRInfo {
+  id: number
+  task_id: number
+  image_path: string
+  text_content: string | null
+  ocr_status: string
+  ocr_error: string | null
+  ocr_timestamp: string | null
+  created_at: string
 }
 
 interface TaskDetailProps {
@@ -24,6 +61,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   const [previewImage, setPreviewImage] = useState<string | null>(null)
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle')
   const [ocrProgress, setOcrProgress] = useState<OcrProgress | null>(null)
+  const [showOcrComplete, setShowOcrComplete] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   
   const [history, setHistory] = useState<TaskHistory[]>([])
@@ -37,8 +75,14 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     if (window.electronAPI?.onOcrProgress) {
       window.electronAPI.onOcrProgress((progress) => {
         setOcrProgress(progress)
-        if (progress.status === 'complete' || progress.status === 'error') {
-          setTimeout(() => setOcrProgress(null), 2000)
+        if (progress.status === 'complete') {
+          setShowOcrComplete(true)
+          setTimeout(() => {
+            setShowOcrComplete(false)
+            setOcrProgress(null)
+          }, 2000)
+        } else if (progress.status === 'error') {
+          setTimeout(() => setOcrProgress(null), 3000)
         }
       })
     }
@@ -89,13 +133,14 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   }, [task.id])
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
+    const date = new Date(dateString + 'Z')
     return date.toLocaleDateString('zh-CN', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
+      timeZone: 'Asia/Shanghai'
     })
   }
 
@@ -148,8 +193,9 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     if (!newContent.trim()) return
     
     const updatedTask = { ...task, description: newContent.trim() }
-    onUpdate(updatedTask)
+    await onUpdate(updatedTask)
     setNewContent('')
+    loadHistory()
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -259,6 +305,13 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
         </div>
       </div>
 
+      {task.description && (
+        <div>
+          <h3 className="text-sm font-medium text-gray-500 mb-1">描述</h3>
+          <TaskDescription description={task.description} onImageClick={setPreviewImage} taskId={task.id} />
+        </div>
+      )}
+
       <div>
         <h3 className="text-sm font-medium text-gray-500 mb-3">更新历史</h3>
         
@@ -289,21 +342,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             </button>
-            {ocrProgress && (
-              <div className="flex items-center gap-2 px-3 py-1 bg-blue-50 rounded-lg text-sm text-blue-700">
-                {ocrProgress.status === 'downloading' || ocrProgress.status === 'recognizing' ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
-                    <span>{ocrProgress.message}</span>
-                    <span className="text-blue-500">({ocrProgress.progress}%)</span>
-                  </>
-                ) : ocrProgress.status === 'complete' ? (
-                  <span className="text-green-600">{ocrProgress.message}</span>
-                ) : (
-                  <span className="text-red-600">{ocrProgress.message}</span>
-                )}
-              </div>
-            )}
+            <OcrProgressBar progress={ocrProgress} showComplete={showOcrComplete} />
             <button
               onClick={handleAddContent}
               disabled={!newContent.trim()}
@@ -340,18 +379,29 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
               let hasImages = false
               
               if (item.action === 'created') {
-                changeText = '创建了任务'
                 try {
                   const newValue = item.new_value ? JSON.parse(item.new_value) : {}
+                  const changes: string[] = ['创建了任务']
+                  
                   if (newValue.description) {
                     const localImgPaths = newValue.description.match(/!\[.*?\]\(local:\/\/[^)]+\)/g) || []
                     const dataUrlImages = newValue.description.match(/!\[.*?\]\(data:image\/[^)]+\)/g) || []
                     if (localImgPaths.length + dataUrlImages.length > 0) {
                       hasImages = true
                     }
+                    
+                    const textContent = newValue.description
+                      .replace(/!\[.*?\]\(local:\/\/[^)]+\)/g, '')
+                      .replace(/!\[.*?\]\(data:image\/[^)]+\)/g, '')
+                      .trim()
+                    
+                    if (textContent) {
+                      changes.push(textContent)
+                    }
                   }
+                  changeText = changes.join('：')
                 } catch {
-                  // ignore parse errors
+                  changeText = '创建了任务'
                 }
               } else if (item.action === 'updated') {
                 try {
@@ -443,7 +493,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                   <div className="flex-1">
                     <p className="text-gray-700">{changeText}</p>
                     {hasImages && item.new_value && (
-                      <HistoryImages newValue={item.new_value} onImageClick={setPreviewImage} />
+                      <HistoryImages newValue={item.new_value} onImageClick={setPreviewImage} taskId={task.id} />
                     )}
                     <p className="text-gray-400 text-xs mt-0.5">{formatDate(item.timestamp)}</p>
                   </div>
@@ -523,11 +573,196 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   )
 }
 
-const HistoryImages = React.memo<{ newValue: string; onImageClick: (url: string) => void }>(
-  ({ newValue, onImageClick }) => {
+const TaskDescription: React.FC<{ description: string; onImageClick: (url: string) => void; taskId: number }> = ({ description, onImageClick, taskId }) => {
+  const [images, setImages] = useState<{ path: string; dataUrl: string; error: boolean }[]>([])
+  const [loading, setLoading] = useState(true)
+  const [ocrInfo, setOcrInfo] = useState<Map<string, ImageOCRInfo>>(new Map())
+  const [retrying, setRetrying] = useState<string | null>(null)
+  const loadedRef = useRef(false)
+
+  useEffect(() => {
+    if (loadedRef.current) return
+    loadedRef.current = true
+
+    const loadImages = async () => {
+      try {
+        setLoading(true)
+        const loaded: { path: string; dataUrl: string; error: boolean }[] = []
+        
+        const localRegex = /!\[.*?\]\(local:\/\/([^)]+)\)/g
+        let match
+        const localPaths: string[] = []
+        while ((match = localRegex.exec(description)) !== null) {
+          localPaths.push(match[1])
+        }
+        
+        for (const path of localPaths) {
+          try {
+            const dataUrl = await imageApi.load(path)
+            if (dataUrl) {
+              loaded.push({ path, dataUrl, error: false })
+            } else {
+              loaded.push({ path, dataUrl: '', error: true })
+            }
+          } catch {
+            loaded.push({ path, dataUrl: '', error: true })
+          }
+        }
+        
+        setImages(loaded)
+        
+        if (taskId) {
+          try {
+            const ocrData = await ocrApi.getTaskImageInfo(taskId)
+            const ocrMap = new Map<string, ImageOCRInfo>()
+            ocrData.forEach(info => ocrMap.set(info.image_path, info))
+            setOcrInfo(ocrMap)
+          } catch (e) {
+            console.error('Failed to load OCR info:', e)
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load description images:', e)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadImages()
+  }, [description, taskId])
+
+  const handleRetryOCR = async (imagePath: string) => {
+    setRetrying(imagePath)
+    try {
+      await ocrApi.retry(taskId, imagePath)
+      const ocrData = await ocrApi.getTaskImageInfo(taskId)
+      const ocrMap = new Map<string, ImageOCRInfo>()
+      ocrData.forEach(info => ocrMap.set(info.image_path, info))
+      setOcrInfo(ocrMap)
+    } catch (e) {
+      console.error('Failed to retry OCR:', e)
+    } finally {
+      setRetrying(null)
+    }
+  }
+
+  const textContent = description
+    .replace(/!\[.*?\]\(local:\/\/[^)]+\)/g, '')
+    .replace(/!\[.*?\]\(data:image\/[^)]+\)/g, '')
+    .trim()
+
+  const getOCRStatusBadge = (info: ImageOCRInfo | undefined) => {
+    if (!info) {
+      return <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">待识别</span>
+    }
+    if (info.ocr_status === 'success') {
+      return <span className="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded">识别成功</span>
+    }
+    if (info.ocr_status === 'failed') {
+      return <span className="text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded">识别失败</span>
+    }
+    return <span className="text-xs text-yellow-600 bg-yellow-50 px-1.5 py-0.5 rounded">识别中</span>
+  }
+
+  return (
+    <div className="text-sm text-gray-700">
+      {textContent && <p className="whitespace-pre-wrap">{textContent}</p>}
+      {loading && images.length === 0 && description.includes('![') && (
+        <div className="flex gap-1 mt-2">
+          <div className="w-16 h-16 bg-gray-100 rounded animate-pulse"></div>
+        </div>
+      )}
+      {images.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {images.map((img, idx) => {
+            const info = ocrInfo.get(img.path)
+            return (
+              <div key={idx} className="border border-gray-200 rounded-lg p-2">
+                <div className="flex items-start gap-3">
+                  {img.error ? (
+                    <div className="w-16 h-16 bg-red-50 rounded flex items-center justify-center flex-shrink-0">
+                      <span className="text-red-400 text-xs">加载失败</span>
+                    </div>
+                  ) : (
+                    <img
+                      src={img.dataUrl}
+                      alt={`图片 ${idx + 1}`}
+                      className="w-16 h-16 object-cover rounded cursor-pointer hover:opacity-80 flex-shrink-0"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onImageClick(img.dataUrl)
+                      }}
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      {getOCRStatusBadge(info)}
+                      {info && info.ocr_timestamp && (
+                        <span className="text-xs text-gray-400">
+                          {new Date(info.ocr_timestamp).toLocaleString('zh-CN')}
+                        </span>
+                      )}
+                    </div>
+                    {info && info.text_content && (
+                      <p className="text-xs text-gray-600 line-clamp-2 mb-1" title={info.text_content}>
+                        {info.text_content.substring(0, 100)}{info.text_content.length > 100 ? '...' : ''}
+                      </p>
+                    )}
+                    {info && info.ocr_error && (
+                      <p className="text-xs text-red-500 mb-1">{info.ocr_error}</p>
+                    )}
+                    <button
+                      onClick={() => handleRetryOCR(img.path)}
+                      disabled={retrying === img.path}
+                      className="text-xs text-blue-500 hover:text-blue-600 disabled:text-gray-400"
+                    >
+                      {retrying === img.path ? '重新识别中...' : '重新识别'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const HistoryImages = React.memo<{ newValue: string; onImageClick: (url: string) => void; taskId: number }>(
+  ({ newValue, onImageClick, taskId }) => {
     const [historyImages, setHistoryImages] = useState<{ path: string; dataUrl: string; error: boolean }[]>([])
     const [loading, setLoading] = useState(true)
+    const [ocrInfo, setOcrInfo] = useState<Map<string, ImageOCRInfo>>(new Map())
+    const [retrying, setRetrying] = useState<string | null>(null)
     const loadedRef = useRef(false)
+
+    const getOCRStatusBadge = (info: ImageOCRInfo | undefined) => {
+      if (!info) {
+        return <span className="text-xs text-gray-400 bg-gray-100 px-1 rounded">待识别</span>
+      }
+      if (info.ocr_status === 'success') {
+        return <span className="text-xs text-green-600 bg-green-50 px-1 rounded">成功</span>
+      }
+      if (info.ocr_status === 'failed') {
+        return <span className="text-xs text-red-600 bg-red-50 px-1 rounded">失败</span>
+      }
+      return <span className="text-xs text-yellow-600 bg-yellow-50 px-1 rounded">中</span>
+    }
+
+    const handleRetryOCR = async (imagePath: string) => {
+      setRetrying(imagePath)
+      try {
+        await ocrApi.retry(taskId, imagePath)
+        const ocrData = await ocrApi.getTaskImageInfo(taskId)
+        const ocrMap = new Map<string, ImageOCRInfo>()
+        ocrData.forEach(info => ocrMap.set(info.image_path, info))
+        setOcrInfo(ocrMap)
+      } catch (e) {
+        console.error('Failed to retry OCR:', e)
+      } finally {
+        setRetrying(null)
+      }
+    }
 
     useEffect(() => {
       if (loadedRef.current) return
@@ -568,6 +803,17 @@ const HistoryImages = React.memo<{ newValue: string; onImageClick: (url: string)
             }
             
             setHistoryImages(loaded)
+            
+            if (loaded.length > 0) {
+              try {
+                const ocrData = await ocrApi.getTaskImageInfo(taskId)
+                const ocrMap = new Map<string, ImageOCRInfo>()
+                ocrData.forEach(info => ocrMap.set(info.image_path, info))
+                setOcrInfo(ocrMap)
+              } catch (e) {
+                console.error('Failed to load OCR info:', e)
+              }
+            }
           }
         } catch (e) {
           console.error('Failed to load history images:', e)
@@ -576,7 +822,7 @@ const HistoryImages = React.memo<{ newValue: string; onImageClick: (url: string)
         }
       }
       loadHistoryImages()
-    }, [newValue])
+    }, [newValue, taskId])
 
     if (loading) {
       return (
@@ -595,30 +841,56 @@ const HistoryImages = React.memo<{ newValue: string; onImageClick: (url: string)
     if (historyImages.length === 0) return null
 
     return (
-      <div className="flex gap-1 mt-1 flex-wrap">
-        {historyImages.map((img, idx) => (
-          img.error ? (
-            <div key={idx} className="w-12 h-12 bg-red-50 rounded flex items-center justify-center">
-              <span className="text-red-400 text-xs">失败</span>
+      <div className="mt-2 space-y-1">
+        {historyImages.map((img, idx) => {
+          const info = ocrInfo.get(img.path)
+          return (
+            <div key={idx} className="border border-gray-200 rounded p-1.5">
+              <div className="flex items-center gap-2">
+                {img.error ? (
+                  <div className="w-10 h-10 bg-red-50 rounded flex items-center justify-center flex-shrink-0">
+                    <span className="text-red-400 text-xs">失败</span>
+                  </div>
+                ) : (
+                  <img
+                    src={img.dataUrl}
+                    alt={`历史图片 ${idx + 1}`}
+                    className="w-10 h-10 object-cover rounded cursor-pointer hover:opacity-80 flex-shrink-0"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onImageClick(img.dataUrl)
+                    }}
+                    onError={() => {
+                      setHistoryImages(prev => 
+                        prev.map((item, i) => i === idx ? { ...item, error: true } : item)
+                      )
+                    }}
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    {getOCRStatusBadge(info)}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleRetryOCR(img.path)
+                      }}
+                      disabled={retrying === img.path}
+                      className="text-xs text-blue-500 hover:text-blue-600 disabled:text-gray-400"
+                    >
+                      {retrying === img.path ? '识别中...' : '重新识别'}
+                    </button>
+                  </div>
+                  {info && info.text_content && (
+                    <p className="text-xs text-gray-500 line-clamp-1 mt-0.5" title={info.text_content}>
+                      {info.text_content.substring(0, 50)}{info.text_content.length > 50 ? '...' : ''}
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
-          ) : (
-            <img
-              key={idx}
-              src={img.dataUrl}
-              alt={`历史图片 ${idx + 1}`}
-              className="w-12 h-12 object-cover rounded cursor-pointer hover:opacity-80"
-              onClick={(e) => {
-                e.stopPropagation()
-                onImageClick(img.dataUrl)
-              }}
-              onError={() => {
-                setHistoryImages(prev => 
-                  prev.map((item, i) => i === idx ? { ...item, error: true } : item)
-                )
-              }}
-            />
           )
-        ))}
+        })}
       </div>
     )
   }

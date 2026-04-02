@@ -1,6 +1,16 @@
 import React, { useState, useEffect } from 'react'
 import Modal from '../Modal'
-import { appApi } from '../../ipc/tasks'
+import { appApi, ocrApi } from '../../ipc/tasks'
+
+interface OCRLog {
+  id: number
+  task_id: number | null
+  image_path: string | null
+  status: string
+  message: string | null
+  error: string | null
+  timestamp: string
+}
 
 interface SettingsModalProps {
   isOpen: boolean
@@ -77,12 +87,27 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [appVersion, setAppVersion] = useState<string>('')
   const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [ocrLogs, setOcrLogs] = useState<OCRLog[]>([])
+  const [ocrLogsLoading, setOcrLogsLoading] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
       loadConfig()
+      loadOCRLogs()
     }
   }, [isOpen])
+
+  const loadOCRLogs = async () => {
+    setOcrLogsLoading(true)
+    try {
+      const logs = await ocrApi.getLogs(20)
+      setOcrLogs(logs)
+    } catch (error) {
+      console.error('Failed to load OCR logs:', error)
+    } finally {
+      setOcrLogsLoading(false)
+    }
+  }
 
   const loadConfig = async () => {
     setLoading(true)
@@ -311,6 +336,63 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
             </div>
             <p className="mt-2 text-xs text-gray-500">
               配置 LLM 服务提供商的 API Key、Base URL、Model 和 HTTP 客户端选项。
+            </p>
+          </div>
+
+          <div className="border-t border-gray-200 pt-6">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-700">
+                OCR 执行日志
+              </label>
+              <button
+                onClick={loadOCRLogs}
+                disabled={ocrLogsLoading}
+                className="text-xs text-blue-500 hover:text-blue-600 disabled:text-gray-400"
+              >
+                刷新
+              </button>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3 max-h-60 overflow-y-auto">
+              {ocrLogsLoading ? (
+                <div className="flex items-center justify-center py-4">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
+                </div>
+              ) : ocrLogs.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-4">暂无 OCR 日志</p>
+              ) : (
+                <div className="space-y-2">
+                  {ocrLogs.map((log) => (
+                    <div key={log.id} className="flex items-start gap-2 text-xs border-b border-gray-200 pb-2 last:border-0">
+                      <span className={`px-1.5 py-0.5 rounded ${
+                        log.status === 'success' 
+                          ? 'bg-green-50 text-green-600' 
+                          : 'bg-red-50 text-red-600'
+                      }`}>
+                        {log.status === 'success' ? '成功' : '失败'}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        {log.image_path && (
+                          <p className="text-gray-600 truncate" title={log.image_path}>
+                            图片: {log.image_path}
+                          </p>
+                        )}
+                        {log.message && (
+                          <p className="text-gray-500">{log.message}</p>
+                        )}
+                        {log.error && (
+                          <p className="text-red-500">{log.error}</p>
+                        )}
+                        <p className="text-gray-400">
+                          {new Date(log.timestamp).toLocaleString('zh-CN')}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <p className="mt-2 text-xs text-gray-500">
+              显示最近 20 条 OCR 执行记录。如果日志显示成功但搜索无结果，可能是图片中没有可识别的文字。
             </p>
           </div>
 

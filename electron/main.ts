@@ -12,6 +12,14 @@ let db: Database.Database | null = null
 let manualUpdateCheck = false
 const isDev = !app.isPackaged
 
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error)
+})
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason)
+})
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -157,13 +165,62 @@ function initDatabase() {
     db.exec(`
       CREATE TABLE IF NOT EXISTS image_texts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER NOT NULL,
+        task_id INTEGER,
         image_path TEXT NOT NULL,
         text_content TEXT,
+        ocr_status TEXT DEFAULT 'pending',
+        ocr_error TEXT,
+        ocr_timestamp TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (task_id) REFERENCES tasks(id)
       )
     `)
+    
+    try {
+      db.exec(`ALTER TABLE image_texts ADD COLUMN task_id_temp INTEGER`)
+      db.exec(`UPDATE image_texts SET task_id_temp = task_id`)
+      db.exec(`CREATE TABLE image_texts_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        image_path TEXT NOT NULL,
+        text_content TEXT,
+        ocr_status TEXT DEFAULT 'pending',
+        ocr_error TEXT,
+        ocr_timestamp TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (task_id) REFERENCES tasks(id)
+      )`)
+      db.exec(`INSERT INTO image_texts_new SELECT id, task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp, created_at FROM image_texts`)
+      db.exec(`DROP TABLE image_texts`)
+      db.exec(`ALTER TABLE image_texts_new RENAME TO image_texts`)
+    } catch (e) {
+      // 表结构已经是正确的，忽略错误
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ocr_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        image_path TEXT,
+        status TEXT NOT NULL,
+        message TEXT,
+        error TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+
+    const imageTextsInfo = db.prepare('PRAGMA table_info(image_texts)').all() as { name: string }[]
+    const existingColumns = imageTextsInfo.map(col => col.name)
+    
+    if (!existingColumns.includes('ocr_status')) {
+      db.exec('ALTER TABLE image_texts ADD COLUMN ocr_status TEXT DEFAULT \'pending\'')
+    }
+    if (!existingColumns.includes('ocr_error')) {
+      db.exec('ALTER TABLE image_texts ADD COLUMN ocr_error TEXT')
+    }
+    if (!existingColumns.includes('ocr_timestamp')) {
+      db.exec('ALTER TABLE image_texts ADD COLUMN ocr_timestamp TEXT')
+    }
   } catch (error) {
     console.error('Failed to initialize database:', error)
     app.quit()
@@ -193,47 +250,78 @@ async function backfillEmbeddings() {
 
 async function backfillImageTexts() {
   try {
-    const imagesWithoutText = db?.prepare(`
+    const tasksWithImages = db?.prepare(`
       SELECT t.id as task_id, t.description 
       FROM tasks t 
       WHERE t.description LIKE '%![%](%)%'
-      AND NOT EXISTS (
-        SELECT 1 FROM image_texts it WHERE it.task_id = t.id
-      )
     `).all() as { task_id: number; description: string }[]
 
-    if (imagesWithoutText && imagesWithoutText.length > 0) {
-      console.log(`Found ${imagesWithoutText.length} tasks with images needing OCR...`)
-      const imagesDir = getImagesDir()
+    if (!tasksWithImages || tasksWithImages.length === 0) {
+      return
+    }
+
+    const imagesDir = getImagesDir()
+    let processedCount = 0
+    
+    for (const task of tasksWithImages) {
+      const imageMatches = [...task.description.matchAll(/!\[.*?\]\(([^)]+)\)/g)]
       
-      for (const task of imagesWithoutText) {
-        const imageMatches = [...task.description.matchAll(/!\[.*?\]\(([^)]+)\)/g)]
-        console.log(`Task ${task.task_id}: found ${imageMatches.length} images`)
+      for (const match of imageMatches) {
+        let imagePath = match[1]
+        if (imagePath.startsWith('local://')) {
+          imagePath = imagePath.replace('local://', '')
+        }
         
-        for (const match of imageMatches) {
-          let imagePath = match[1]
-          if (imagePath.startsWith('local://')) {
-            imagePath = imagePath.replace('local://', '')
-          }
-          const fullPath = path.join(imagesDir, imagePath)
+        const existingRecord = db?.prepare(`
+          SELECT 1 FROM image_texts 
+          WHERE task_id = ? AND image_path = ? AND ocr_status = 'success'
+        `).get(task.task_id, imagePath)
+        
+        if (existingRecord) {
+          continue
+        }
+        
+        const fullPath = path.join(imagesDir, imagePath)
+        
+        if (fs.existsSync(fullPath)) {
+          console.log(`Processing OCR for task ${task.task_id}, image: ${imagePath}`)
+          processedCount++
+          const ocrResult = await extractText(fullPath, mainWindow)
           
-          console.log(`Checking image path: ${fullPath}`)
-          if (fs.existsSync(fullPath)) {
-            console.log(`Processing OCR for task ${task.task_id}, image: ${imagePath}`)
-            const textContent = await extractText(fullPath, mainWindow)
-            
-            if (textContent) {
-              db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content) VALUES (?, ?, ?)').run(task.task_id, imagePath, textContent)
-              console.log(`OCR completed for task ${task.task_id}, text length: ${textContent.length}`)
-            } else {
-              console.log(`No text extracted from image: ${imagePath}`)
-            }
+          db?.prepare('INSERT INTO ocr_logs (task_id, image_path, status, message, error) VALUES (?, ?, ?, ?, ?)').run(
+            task.task_id,
+            imagePath,
+            ocrResult.success ? 'success' : 'failed',
+            ocrResult.success ? `识别完成，文字长度: ${ocrResult.text.length}` : null,
+            ocrResult.error || null
+          )
+          
+          if (ocrResult.success && ocrResult.text) {
+            db?.prepare('INSERT OR REPLACE INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_timestamp) VALUES (?, ?, ?, ?, ?)').run(
+              task.task_id, 
+              imagePath, 
+              ocrResult.text,
+              'success',
+              ocrResult.timestamp
+            )
+            console.log(`OCR completed for task ${task.task_id}, text length: ${ocrResult.text.length}`)
           } else {
-            console.log(`Image file not found: ${fullPath}`)
+            db?.prepare('INSERT OR REPLACE INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
+              task.task_id, 
+              imagePath, 
+              '',
+              'failed',
+              ocrResult.error || 'Unknown error',
+              ocrResult.timestamp
+            )
+            console.log(`OCR failed for image: ${imagePath}, error: ${ocrResult.error}`)
           }
         }
       }
-      console.log('Finished OCR for all existing images')
+    }
+    
+    if (processedCount > 0) {
+      console.log(`Finished OCR for ${processedCount} images`)
     }
   } catch (error) {
     console.error('Failed to backfill image texts:', error)
@@ -264,9 +352,15 @@ async function updateTaskEmbedding(taskId: number, title: string, description: s
 
 app.whenReady().then(async () => {
   initDatabase()
-  await backfillEmbeddings()
-  await backfillImageTexts()
   createWindow()
+  
+  setTimeout(async () => {
+    try {
+      await backfillEmbeddings()
+    } catch (error) {
+      console.error('Failed to backfill data:', error)
+    }
+  }, 1000)
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
@@ -332,13 +426,25 @@ app.on('window-all-closed', () => {
 })
 
 ipcMain.handle('task:create', async (_event, task: { title: string; description?: string; status?: string; priority?: string; due_date?: string }) => {
+  console.log('[task:create] Creating task with description:', task.description?.substring(0, 100))
   const stmt = db?.prepare('INSERT INTO tasks (title, description, status, priority, due_date) VALUES (?, ?, ?, ?, ?)')
   const result = stmt?.run(task.title, task.description || null, task.status || 'in_progress', task.priority || 'medium', task.due_date || null)
   const taskId = result?.lastInsertRowid as number
+  console.log('[task:create] Created task with ID:', taskId)
 
   if (taskId) {
     addHistoryRecord(taskId, 'created', null, JSON.stringify({ title: task.title, description: task.description, status: task.status || 'in_progress', priority: task.priority || 'medium', due_date: task.due_date }))
-    await updateTaskEmbedding(taskId, task.title, task.description || null)
+    updateTaskEmbedding(taskId, task.title, task.description || null).catch(err => console.error('Failed to generate embedding:', err))
+    
+    if (task.description) {
+      const imageMatches = [...task.description.matchAll(/!\[.*?\]\(local:\/\/([^)]+)\)/g)]
+      console.log('[task:create] Found images to link:', imageMatches.length)
+      for (const match of imageMatches) {
+        const imagePath = match[1]
+        const updateResult = db?.prepare('UPDATE image_texts SET task_id = ? WHERE image_path = ? AND (task_id IS NULL OR task_id = 0)').run(taskId, imagePath)
+        console.log('[task:create] Linked image:', imagePath, 'changes:', updateResult?.changes)
+      }
+    }
   }
 
   return taskId
@@ -407,7 +513,7 @@ ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: str
   if (task.title !== undefined || task.description !== undefined) {
     const newTitle = task.title !== undefined ? task.title : oldTask.title
     const newDescription = task.description !== undefined ? task.description : oldTask.description
-    await updateTaskEmbedding(taskId, newTitle, newDescription)
+    updateTaskEmbedding(taskId, newTitle, newDescription).catch(err => console.error('Failed to generate embedding:', err))
   }
 
   return true
@@ -742,12 +848,49 @@ ipcMain.handle('image:save', async (_event, imageData: string, fileName: string,
     const buffer = Buffer.from(base64Data, 'base64')
     fs.writeFileSync(filePath, buffer)
     
-    if (taskId) {
-      const textContent = await extractText(filePath, mainWindow)
-      if (textContent) {
-        db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content) VALUES (?, ?, ?)').run(taskId, uniqueName, textContent)
-        console.log(`OCR completed for task ${taskId}, text length: ${textContent.length}`)
+    console.log('[image:save] Image file saved:', uniqueName)
+    
+    try {
+      const ocrResult = await extractText(filePath, mainWindow)
+      
+      db?.prepare('INSERT INTO ocr_logs (task_id, image_path, status, message, error) VALUES (?, ?, ?, ?, ?)').run(
+        taskId || null,
+        uniqueName,
+        ocrResult.success ? 'success' : 'failed',
+        ocrResult.success ? `识别完成，文字长度: ${ocrResult.text.length}` : null,
+        ocrResult.error || null
+      )
+      
+      if (ocrResult.success && ocrResult.text) {
+        db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_timestamp) VALUES (?, ?, ?, ?, ?)').run(
+          taskId || null, 
+          uniqueName, 
+          ocrResult.text,
+          'success',
+          ocrResult.timestamp
+        )
+        console.log(`[image:save] OCR completed for task ${taskId || 'new'}, text length: ${ocrResult.text.length}`)
+      } else {
+        db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
+          taskId || null, 
+          uniqueName, 
+          '',
+          'failed',
+          ocrResult.error || 'Unknown error',
+          ocrResult.timestamp
+        )
+        console.log(`[image:save] OCR failed for image: ${uniqueName}, error: ${ocrResult.error}`)
       }
+    } catch (ocrError) {
+      console.error('[image:save] OCR execution failed (image still saved):', ocrError)
+      db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
+        taskId || null, 
+        uniqueName, 
+        '',
+        'failed',
+        ocrError instanceof Error ? ocrError.message : 'OCR execution failed',
+        new Date().toISOString()
+      )
     }
     
     return { success: true, path: uniqueName }
@@ -1031,5 +1174,74 @@ ipcMain.handle('app:checkForUpdates', async () => {
   } catch (error) {
     manualUpdateCheck = false
     return { success: false, error: error instanceof Error ? error.message : '检查更新失败' }
+  }
+})
+
+ipcMain.handle('ocr:getTaskImageInfo', (_event, taskId: number) => {
+  try {
+    const stmt = db?.prepare('SELECT * FROM image_texts WHERE task_id = ?')
+    return stmt?.all(taskId) || []
+  } catch (error) {
+    console.error('Failed to get task image OCR info:', error)
+    return []
+  }
+})
+
+ipcMain.handle('ocr:getLogs', (_event, limit?: number) => {
+  try {
+    const logLimit = limit || 100
+    const stmt = db?.prepare('SELECT * FROM ocr_logs ORDER BY timestamp DESC LIMIT ?')
+    return stmt?.all(logLimit) || []
+  } catch (error) {
+    console.error('Failed to get OCR logs:', error)
+    return []
+  }
+})
+
+ipcMain.handle('ocr:retry', async (_event, taskId: number, imagePath: string) => {
+  try {
+    const imagesDir = getImagesDir()
+    const fullPath = path.join(imagesDir, imagePath)
+    
+    if (!fs.existsSync(fullPath)) {
+      return { success: false, error: 'Image file not found' }
+    }
+    
+    const ocrResult = await extractText(fullPath, mainWindow)
+    
+    db?.prepare('INSERT INTO ocr_logs (task_id, image_path, status, message, error) VALUES (?, ?, ?, ?, ?)').run(
+      taskId,
+      imagePath,
+      ocrResult.success ? 'success' : 'failed',
+      ocrResult.success ? `重新识别完成，文字长度: ${ocrResult.text.length}` : null,
+      ocrResult.error || null
+    )
+    
+    const existingRecord = db?.prepare('SELECT id FROM image_texts WHERE task_id = ? AND image_path = ?').get(taskId, imagePath)
+    
+    if (existingRecord) {
+      db?.prepare('UPDATE image_texts SET text_content = ?, ocr_status = ?, ocr_error = ?, ocr_timestamp = ? WHERE task_id = ? AND image_path = ?').run(
+        ocrResult.text,
+        ocrResult.success ? 'success' : 'failed',
+        ocrResult.error || null,
+        ocrResult.timestamp,
+        taskId,
+        imagePath
+      )
+    } else {
+      db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
+        taskId,
+        imagePath,
+        ocrResult.text,
+        ocrResult.success ? 'success' : 'failed',
+        ocrResult.error || null,
+        ocrResult.timestamp
+      )
+    }
+    
+    return { success: true }
+  } catch (error) {
+    console.error('Failed to retry OCR:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to retry OCR' }
   }
 })

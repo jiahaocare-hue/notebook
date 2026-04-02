@@ -87,17 +87,40 @@ export const TaskProvider: React.FC<TaskProviderProps> = ({ children }) => {
   }, [])
 
   const createTask = useCallback(async (task: NewTask): Promise<number> => {
+    const tempId = Date.now()
+    const now = new Date().toISOString()
+    const optimisticTask: Task = {
+      id: tempId,
+      title: task.title,
+      description: task.description || null,
+      status: task.status || 'in_progress',
+      priority: task.priority || 'medium',
+      due_date: task.due_date || null,
+      created_at: now,
+      updated_at: now,
+    }
+    
+    setTasks(prev => [optimisticTask, ...prev])
+    
     try {
       const id = await taskApi.create(task)
-      await refreshTasks()
-      await refreshCounts()
-      await refreshTotalCounts()
+      
+      setTasks(prev => prev.map(t => 
+        t.id === tempId 
+          ? { ...t, id } 
+          : t
+      ))
+      
+      refreshCounts()
+      refreshTotalCounts()
+      
       return id
     } catch (error) {
       console.error('Failed to create task:', error)
+      setTasks(prev => prev.filter(t => t.id !== tempId))
       throw error
     }
-  }, [refreshTasks, refreshCounts, refreshTotalCounts])
+  }, [refreshCounts, refreshTotalCounts])
 
   const updateTask = useCallback(async (id: number, task: UpdateTask): Promise<boolean> => {
     try {

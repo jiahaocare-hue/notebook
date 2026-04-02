@@ -34,8 +34,32 @@ declare global {
       checkForUpdates: () => Promise<{ success: boolean; error?: string }>
       onOcrProgress: (callback: (progress: { status: string; progress: number; message: string }) => void) => void
       removeOcrProgressListener: () => void
+      getTaskImageOCRInfo: (taskId: number) => Promise<ImageOCRInfo[]>
+      getOCRLogs: (limit?: number) => Promise<OCRLog[]>
+      retryOCR: (taskId: number, imagePath: string) => Promise<{ success: boolean; error?: string }>
     }
   }
+}
+
+interface ImageOCRInfo {
+  id: number
+  task_id: number
+  image_path: string
+  text_content: string | null
+  ocr_status: string
+  ocr_error: string | null
+  ocr_timestamp: string | null
+  created_at: string
+}
+
+interface OCRLog {
+  id: number
+  task_id: number | null
+  image_path: string | null
+  status: string
+  message: string | null
+  error: string | null
+  timestamp: string
 }
 
 const getElectronAPI = () => {
@@ -181,5 +205,23 @@ export const appApi = {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.checkForUpdates()
+  },
+}
+
+export const ocrApi = {
+  getTaskImageInfo: async (taskId: number): Promise<ImageOCRInfo[]> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getTaskImageOCRInfo(taskId)
+  },
+  getLogs: async (limit?: number): Promise<OCRLog[]> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getOCRLogs(limit)
+  },
+  retry: async (taskId: number, imagePath: string): Promise<{ success: boolean; error?: string }> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.retryOCR(taskId, imagePath)
   },
 }
