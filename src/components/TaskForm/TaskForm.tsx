@@ -87,13 +87,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
 
       if (imagePreview) {
         const savedPath = await imageApi.save(imagePreview.dataUrl, imagePreview.file.name)
-        console.log('[TaskForm] Image saved:', savedPath)
         if (savedPath) {
           const imageRef = `![${imagePreview.file.name}](local://${savedPath})`
           finalDescription = finalDescription 
             ? `${finalDescription}\n\n${imageRef}` 
             : imageRef
-          console.log('[TaskForm] Final description:', finalDescription)
         }
       }
 

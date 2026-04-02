@@ -118,7 +118,6 @@ export async function extractText(imagePath: string, window: BrowserWindow | nul
       : path.join(process.cwd(), imagePath)
     
     if (!fs.existsSync(absolutePath)) {
-      console.error('Image file not found:', absolutePath)
       return {
         success: false,
         text: '',
@@ -127,10 +126,7 @@ export async function extractText(imagePath: string, window: BrowserWindow | nul
       }
     }
 
-    console.log('Starting OCR for:', absolutePath)
-    
     const tessDataPath = await ensureModelsExist(window)
-    console.log('Using tessdata path:', tessDataPath)
     
     let result
     try {
@@ -150,7 +146,6 @@ export async function extractText(imagePath: string, window: BrowserWindow | nul
       result = await worker.recognize(absolutePath)
       await worker.terminate()
     } catch (tesseractError) {
-      console.error('Tesseract worker error:', tesseractError)
       return {
         success: false,
         text: '',
@@ -159,7 +154,6 @@ export async function extractText(imagePath: string, window: BrowserWindow | nul
       }
     }
 
-    console.log('OCR completed for:', absolutePath)
     sendProgress(window, 'complete', 100, '识别完成')
     
     return {
@@ -168,7 +162,6 @@ export async function extractText(imagePath: string, window: BrowserWindow | nul
       timestamp
     }
   } catch (error) {
-    console.error('OCR failed:', error)
     sendProgress(window, 'error', 0, 'OCR 识别失败')
     
     return {

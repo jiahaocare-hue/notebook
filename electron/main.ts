@@ -14,11 +14,11 @@ let manualUpdateCheck = false
 const isDev = !app.isPackaged
 
 process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error)
+  logger.error('Uncaught Exception:', error)
 })
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason)
+  logger.error('Unhandled Rejection at:', promise, 'reason:', reason)
 })
 
 function createWindow() {
@@ -88,7 +88,7 @@ function loadConfig(): AppConfig {
       return JSON.parse(content)
     }
   } catch (error) {
-    console.error('Failed to load config:', error)
+    logger.error('Failed to load config:', error)
   }
   return {}
 }
@@ -99,27 +99,21 @@ function saveConfig(config: AppConfig): boolean {
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
     return true
   } catch (error) {
-    console.error('Failed to save config:', error)
+    logger.error('Failed to save config:', error)
     return false
   }
 }
 
 function getDataDir(): string {
-  logger.info('[getDataDir] isDev:', isDev)
   const config = loadConfig()
   if (config.dataDir && fs.existsSync(config.dataDir)) {
-    logger.info('[getDataDir] Using config dataDir:', config.dataDir)
     return config.dataDir
   }
   
   if (isDev) {
-    const devPath = path.join(__dirname, '..', 'data')
-    logger.info('[getDataDir] Dev mode, using:', devPath)
-    return devPath
+    return path.join(__dirname, '..', 'data')
   }
-  const prodPath = path.join(app.getPath('userData'), 'data')
-  logger.info('[getDataDir] Production mode, using:', prodPath)
-  return prodPath
+  return path.join(app.getPath('userData'), 'data')
 }
 
 function initDatabase() {
@@ -127,15 +121,12 @@ function initDatabase() {
     const dataDir = getDataDir()
     const dbPath = path.join(dataDir, 'tasks.db')
     
-    console.log('dbPath:', dbPath)
-    
     const dbDir = path.dirname(dbPath)
     if (!fs.existsSync(dbDir)) {
       fs.mkdirSync(dbDir, { recursive: true })
     }
     
     db = new Database(dbPath)
-    console.log('Database initialized successfully')
     
     db.exec('PRAGMA foreign_keys = OFF')
 
@@ -234,7 +225,7 @@ function initDatabase() {
       db.exec('ALTER TABLE image_texts ADD COLUMN ocr_timestamp TEXT')
     }
   } catch (error) {
-    console.error('Failed to initialize database:', error)
+    logger.error('Failed to initialize database:', error)
     app.quit()
   }
 }
@@ -249,14 +240,12 @@ async function backfillEmbeddings() {
     `).all() as { id: number; title: string; description: string | null }[]
 
     if (tasksWithoutEmbeddings && tasksWithoutEmbeddings.length > 0) {
-      console.log(`Found ${tasksWithoutEmbeddings.length} tasks without embeddings, generating...`)
       for (const task of tasksWithoutEmbeddings) {
         await updateTaskEmbedding(task.id, task.title, task.description)
       }
-      console.log('Finished generating embeddings for all tasks')
     }
   } catch (error) {
-    console.error('Failed to backfill embeddings:', error)
+    logger.error('Failed to backfill embeddings:', error)
   }
 }
 
@@ -296,7 +285,6 @@ async function backfillImageTexts() {
         const fullPath = path.join(imagesDir, imagePath)
         
         if (fs.existsSync(fullPath)) {
-          console.log(`Processing OCR for task ${task.task_id}, image: ${imagePath}`)
           processedCount++
           const ocrResult = await extractText(fullPath, mainWindow)
           
@@ -316,7 +304,6 @@ async function backfillImageTexts() {
               'success',
               ocrResult.timestamp
             )
-            console.log(`OCR completed for task ${task.task_id}, text length: ${ocrResult.text.length}`)
           } else {
             db?.prepare('INSERT OR REPLACE INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
               task.task_id, 
@@ -326,17 +313,12 @@ async function backfillImageTexts() {
               ocrResult.error || 'Unknown error',
               ocrResult.timestamp
             )
-            console.log(`OCR failed for image: ${imagePath}, error: ${ocrResult.error}`)
           }
         }
       }
     }
-    
-    if (processedCount > 0) {
-      console.log(`Finished OCR for ${processedCount} images`)
-    }
   } catch (error) {
-    console.error('Failed to backfill image texts:', error)
+    logger.error('Failed to backfill image texts:', error)
   }
 }
 
@@ -358,7 +340,7 @@ async function updateTaskEmbedding(taskId: number, title: string, description: s
       db?.prepare('INSERT INTO task_embeddings (task_id, embedding) VALUES (?, ?)').run(taskId, JSON.stringify(embedding))
     }
   } catch (error) {
-    console.error('Failed to update embedding:', error)
+    logger.error('Failed to update embedding:', error)
   }
 }
 
@@ -370,7 +352,7 @@ app.whenReady().then(async () => {
     try {
       await backfillEmbeddings()
     } catch (error) {
-      console.error('Failed to backfill data:', error)
+      logger.error('Failed to backfill data:', error)
     }
   }, 1000)
 
@@ -405,7 +387,7 @@ app.whenReady().then(async () => {
   })
 
   autoUpdater.on('error', (error) => {
-    console.error('Auto updater error:', error)
+    logger.error('Auto updater error:', error)
     if (manualUpdateCheck) {
       dialog.showMessageBox(mainWindow!, {
         type: 'error',
@@ -441,21 +423,16 @@ ipcMain.handle('task:create', async (_event, task: { title: string; description?
   const stmt = db?.prepare('INSERT INTO tasks (title, description, status, priority, due_date) VALUES (?, ?, ?, ?, ?)')
   const result = stmt?.run(task.title, task.description || null, task.status || 'in_progress', task.priority || 'medium', task.due_date || null)
   const taskId = result?.lastInsertRowid as number
-  
-  logger.info('[task:create] Created task with ID:', taskId)
-  logger.info('[task:create] Description (first 200 chars):', task.description?.substring(0, 200))
 
   if (taskId) {
     addHistoryRecord(taskId, 'created', null, JSON.stringify({ title: task.title, description: task.description, status: task.status || 'in_progress', priority: task.priority || 'medium', due_date: task.due_date }))
-    updateTaskEmbedding(taskId, task.title, task.description || null).catch(err => console.error('Failed to generate embedding:', err))
+    updateTaskEmbedding(taskId, task.title, task.description || null).catch(err => logger.error('Failed to generate embedding:', err))
     
     if (task.description) {
       const imageMatches = [...task.description.matchAll(/!\[.*?\]\(local:\/\/([^)]+)\)/g)]
-      console.log('[task:create] Found images to link:', imageMatches.length)
       for (const match of imageMatches) {
         const imagePath = match[1]
-        const updateResult = db?.prepare('UPDATE image_texts SET task_id = ? WHERE image_path = ? AND (task_id IS NULL OR task_id = 0)').run(taskId, imagePath)
-        console.log('[task:create] Linked image:', imagePath, 'changes:', updateResult?.changes)
+        db?.prepare('UPDATE image_texts SET task_id = ? WHERE image_path = ? AND (task_id IS NULL OR task_id = 0)').run(taskId, imagePath)
       }
     }
   }
@@ -526,7 +503,7 @@ ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: str
   if (task.title !== undefined || task.description !== undefined) {
     const newTitle = task.title !== undefined ? task.title : oldTask.title
     const newDescription = task.description !== undefined ? task.description : oldTask.description
-    updateTaskEmbedding(taskId, newTitle, newDescription).catch(err => console.error('Failed to generate embedding:', err))
+    updateTaskEmbedding(taskId, newTitle, newDescription).catch(err => logger.error('Failed to generate embedding:', err))
   }
 
   return true
@@ -534,43 +511,26 @@ ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: str
 
 ipcMain.handle('task:delete', (_event, taskId: number) => {
   try {
-    console.log('Deleting task:', taskId)
-    
     const getStmt = db?.prepare('SELECT * FROM tasks WHERE id = ?')
     const task = getStmt?.get(taskId)
 
     if (!task) {
-      console.log('Task not found:', taskId)
       return false
     }
 
     const deleteTransaction = db?.transaction(() => {
       db?.exec('PRAGMA foreign_keys = OFF')
-      
-      console.log('Deleting from task_embeddings...')
-      const embResult = db?.prepare('DELETE FROM task_embeddings WHERE task_id = ?').run(taskId)
-      console.log('Deleted from task_embeddings:', embResult?.changes)
-      
-      console.log('Deleting from task_history...')
-      const histResult = db?.prepare('DELETE FROM task_history WHERE task_id = ?').run(taskId)
-      console.log('Deleted from task_history:', histResult?.changes)
-      
-      console.log('Deleting from image_texts...')
-      const imgResult = db?.prepare('DELETE FROM image_texts WHERE task_id = ?').run(taskId)
-      console.log('Deleted from image_texts:', imgResult?.changes)
-      
-      console.log('Deleting from tasks...')
-      const taskResult = db?.prepare('DELETE FROM tasks WHERE id = ?').run(taskId)
-      console.log('Deleted from tasks:', taskResult?.changes)
-      
+      db?.prepare('DELETE FROM task_embeddings WHERE task_id = ?').run(taskId)
+      db?.prepare('DELETE FROM task_history WHERE task_id = ?').run(taskId)
+      db?.prepare('DELETE FROM image_texts WHERE task_id = ?').run(taskId)
+      db?.prepare('DELETE FROM tasks WHERE id = ?').run(taskId)
       db?.exec('PRAGMA foreign_keys = ON')
     })
 
     deleteTransaction?.()
-    console.log('Task deleted successfully:', taskId)
     return true
   } catch (error) {
-    console.error('Failed to delete task:', error)
+    logger.error('Failed to delete task:', error)
     throw error
   }
 })
@@ -745,7 +705,7 @@ ipcMain.handle('search:semantic', async (_event, query: string, options?: { limi
 
     return { tasks: results }
   } catch (error) {
-    console.error('Semantic search error:', error)
+    logger.error('Semantic search error:', error)
     return {
       error: error instanceof Error ? error.message : 'Failed to perform semantic search',
       tasks: []
@@ -830,7 +790,7 @@ ipcMain.handle('search:hybrid', async (_event, query: string, options?: { limit?
 
     return { tasks: combinedResults }
   } catch (error) {
-    console.error('Hybrid search error:', error)
+    logger.error('Hybrid search error:', error)
     return {
       error: error instanceof Error ? error.message : 'Failed to perform hybrid search',
       tasks: []
@@ -867,8 +827,11 @@ ipcMain.handle('image:save', async (_event, imageData: string, fileName: string,
     logger.info('[image:save] Image file saved:', uniqueName)
     
     try {
+      logger.info('[image:save] Calling extractText...')
       const ocrResult = await extractText(filePath, mainWindow)
+      logger.info('[image:save] extractText returned, success:', ocrResult.success, 'text length:', ocrResult.text?.length)
       
+      logger.info('[image:save] Inserting into ocr_logs...')
       db?.prepare('INSERT INTO ocr_logs (task_id, image_path, status, message, error) VALUES (?, ?, ?, ?, ?)').run(
         taskId || null,
         uniqueName,
@@ -876,8 +839,10 @@ ipcMain.handle('image:save', async (_event, imageData: string, fileName: string,
         ocrResult.success ? `识别完成，文字长度: ${ocrResult.text.length}` : null,
         ocrResult.error || null
       )
+      logger.info('[image:save] ocr_logs insert done')
       
       if (ocrResult.success && ocrResult.text) {
+        logger.info('[image:save] Inserting into image_texts (success)...')
         db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_timestamp) VALUES (?, ?, ?, ?, ?)').run(
           taskId || null, 
           uniqueName, 
@@ -885,8 +850,9 @@ ipcMain.handle('image:save', async (_event, imageData: string, fileName: string,
           'success',
           ocrResult.timestamp
         )
-        console.log(`[image:save] OCR completed for task ${taskId || 'new'}, text length: ${ocrResult.text.length}`)
+        logger.info(`[image:save] OCR completed for task ${taskId || 'new'}, text length: ${ocrResult.text.length}`)
       } else {
+        logger.info('[image:save] Inserting into image_texts (failed)...')
         db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
           taskId || null, 
           uniqueName, 
@@ -895,10 +861,10 @@ ipcMain.handle('image:save', async (_event, imageData: string, fileName: string,
           ocrResult.error || 'Unknown error',
           ocrResult.timestamp
         )
-        console.log(`[image:save] OCR failed for image: ${uniqueName}, error: ${ocrResult.error}`)
+        logger.info(`[image:save] OCR failed for image: ${uniqueName}, error: ${ocrResult.error}`)
       }
     } catch (ocrError) {
-      console.error('[image:save] OCR execution failed (image still saved):', ocrError)
+      logger.error('[image:save] OCR execution failed (image still saved):', ocrError)
       db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
         taskId || null, 
         uniqueName, 
@@ -909,9 +875,10 @@ ipcMain.handle('image:save', async (_event, imageData: string, fileName: string,
       )
     }
     
+    logger.info('[image:save] Returning:', { success: true, path: uniqueName })
     return { success: true, path: uniqueName }
   } catch (error) {
-    console.error('Failed to save image:', error)
+    logger.error('Failed to save image:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Failed to save image' }
   }
 })
@@ -920,11 +887,6 @@ ipcMain.handle('image:load', (_event, imagePath: string) => {
   try {
     const imagesDir = getImagesDir()
     const fullPath = path.join(imagesDir, imagePath)
-    
-    logger.info('[image:load] Requested image path:', imagePath)
-    logger.info('[image:load] Images directory:', imagesDir)
-    logger.info('[image:load] Full path:', fullPath)
-    logger.info('[image:load] File exists:', fs.existsSync(fullPath))
     
     if (!fs.existsSync(fullPath)) {
       return { success: false, error: 'Image not found' }
@@ -937,7 +899,7 @@ ipcMain.handle('image:load', (_event, imagePath: string) => {
     
     return { success: true, data: `data:${mimeType};base64,${base64}` }
   } catch (error) {
-    console.error('Failed to load image:', error)
+    logger.error('Failed to load image:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Failed to load image' }
   }
 })
@@ -953,7 +915,7 @@ ipcMain.handle('image:delete', (_event, imagePath: string) => {
     
     return { success: true }
   } catch (error) {
-    console.error('Failed to delete image:', error)
+    logger.error('Failed to delete image:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Failed to delete image' }
   }
 })
@@ -1010,7 +972,7 @@ ipcMain.handle('config:setDataDir', (_event, dataDir: string | null) => {
     const saved = saveConfig(config)
     return { success: saved }
   } catch (error) {
-    console.error('Failed to set data directory:', error)
+    logger.error('Failed to set data directory:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Failed to set data directory' }
   }
 })
@@ -1074,7 +1036,7 @@ ipcMain.handle('llm:setConfig', (_event, llmConfig: { apiKey?: string; baseUrl?:
     const saved = saveConfig(config)
     return { success: saved }
   } catch (error) {
-    console.error('Failed to set LLM config:', error)
+    logger.error('Failed to set LLM config:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Failed to set LLM config' }
   }
 })
@@ -1104,7 +1066,7 @@ ipcMain.handle('llm:generateSummary', async (_event, request: SummaryRequest) =>
     
     return { success: true, summary }
   } catch (error) {
-    console.error('Failed to generate summary:', error)
+    logger.error('Failed to generate summary:', error)
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Failed to generate summary' 
@@ -1129,7 +1091,7 @@ ipcMain.handle('file:save', async (_event, options: { defaultPath: string; filte
     fs.writeFileSync(result.filePath, options.content, 'utf-8')
     return { success: true, filePath: result.filePath }
   } catch (error) {
-    console.error('Failed to save file:', error)
+    logger.error('Failed to save file:', error)
     return { success: false, error: error instanceof Error ? error.message : '保存文件失败' }
   }
 })
@@ -1152,7 +1114,7 @@ ipcMain.handle('file:saveBinary', async (_event, options: { defaultPath: string;
     fs.writeFileSync(result.filePath, buffer)
     return { success: true, filePath: result.filePath }
   } catch (error) {
-    console.error('Failed to save binary file:', error)
+    logger.error('Failed to save binary file:', error)
     return { success: false, error: error instanceof Error ? error.message : '保存文件失败' }
   }
 })
@@ -1168,7 +1130,7 @@ ipcMain.handle('clipboard:writeImage', (_event, imageData: string) => {
     clipboard.writeImage(image)
     return { success: true }
   } catch (error) {
-    console.error('Failed to write image to clipboard:', error)
+    logger.error('Failed to write image to clipboard:', error)
     return { success: false, error: error instanceof Error ? error.message : '复制图片失败' }
   }
 })
@@ -1203,7 +1165,7 @@ ipcMain.handle('ocr:getTaskImageInfo', (_event, taskId: number) => {
     const stmt = db?.prepare('SELECT * FROM image_texts WHERE task_id = ?')
     return stmt?.all(taskId) || []
   } catch (error) {
-    console.error('Failed to get task image OCR info:', error)
+    logger.error('Failed to get task image OCR info:', error)
     return []
   }
 })
@@ -1214,7 +1176,7 @@ ipcMain.handle('ocr:getLogs', (_event, limit?: number) => {
     const stmt = db?.prepare('SELECT * FROM ocr_logs ORDER BY timestamp DESC LIMIT ?')
     return stmt?.all(logLimit) || []
   } catch (error) {
-    console.error('Failed to get OCR logs:', error)
+    logger.error('Failed to get OCR logs:', error)
     return []
   }
 })
@@ -1262,7 +1224,7 @@ ipcMain.handle('ocr:retry', async (_event, taskId: number, imagePath: string) =>
     
     return { success: true }
   } catch (error) {
-    console.error('Failed to retry OCR:', error)
+    logger.error('Failed to retry OCR:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Failed to retry OCR' }
   }
 })
