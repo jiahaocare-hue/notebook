@@ -57,9 +57,18 @@
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "resources/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources",
+        "filter": ["**/*"]
+      }
     ],
     "win": {
+      "icon": "resources/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -76,6 +85,7 @@
       "createStartMenuShortcut": true
     },
     "mac": {
+      "icon": "resources/icon.svg",
       "target": "dmg"
     },
     "linux": {

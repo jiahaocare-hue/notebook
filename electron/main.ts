@@ -21,11 +21,16 @@ process.on('unhandledRejection', (reason, promise) => {
 })
 
 function createWindow() {
+  const iconPath = app.isPackaged 
+    ? path.join(process.resourcesPath, 'resources', 'icon.ico')
+    : path.join(__dirname, '../resources/icon.ico')
+  
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
     minHeight: 600,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,

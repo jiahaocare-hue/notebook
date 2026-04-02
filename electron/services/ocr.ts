@@ -19,7 +19,7 @@ export interface OCRResult {
 
 function getTessDataPath(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'tessdata')
+    return path.join(process.resourcesPath, 'resources', 'tessdata')
   }
   return path.join(__dirname, '../../resources/tessdata')
 }
