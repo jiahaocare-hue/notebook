@@ -6,6 +6,7 @@ import { generateEmbedding, cosineSimilarity } from './services/embedding'
 import { extractText } from './services/ocr'
 import { generateSummary, SummaryRequest } from './services/llm'
 import { autoUpdater } from 'electron-updater'
+import { logger } from './services/logger'
 
 let mainWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
@@ -104,15 +105,21 @@ function saveConfig(config: AppConfig): boolean {
 }
 
 function getDataDir(): string {
+  logger.info('[getDataDir] isDev:', isDev)
   const config = loadConfig()
   if (config.dataDir && fs.existsSync(config.dataDir)) {
+    logger.info('[getDataDir] Using config dataDir:', config.dataDir)
     return config.dataDir
   }
   
   if (isDev) {
-    return path.join(__dirname, '..', 'data')
+    const devPath = path.join(__dirname, '..', 'data')
+    logger.info('[getDataDir] Dev mode, using:', devPath)
+    return devPath
   }
-  return path.join(app.getPath('userData'), 'data')
+  const prodPath = path.join(app.getPath('userData'), 'data')
+  logger.info('[getDataDir] Production mode, using:', prodPath)
+  return prodPath
 }
 
 function initDatabase() {
@@ -431,11 +438,12 @@ app.on('window-all-closed', () => {
 })
 
 ipcMain.handle('task:create', async (_event, task: { title: string; description?: string; status?: string; priority?: string; due_date?: string }) => {
-  console.log('[task:create] Creating task with description:', task.description?.substring(0, 100))
   const stmt = db?.prepare('INSERT INTO tasks (title, description, status, priority, due_date) VALUES (?, ?, ?, ?, ?)')
   const result = stmt?.run(task.title, task.description || null, task.status || 'in_progress', task.priority || 'medium', task.due_date || null)
   const taskId = result?.lastInsertRowid as number
-  console.log('[task:create] Created task with ID:', taskId)
+  
+  logger.info('[task:create] Created task with ID:', taskId)
+  logger.info('[task:create] Description (first 200 chars):', task.description?.substring(0, 200))
 
   if (taskId) {
     addHistoryRecord(taskId, 'created', null, JSON.stringify({ title: task.title, description: task.description, status: task.status || 'in_progress', priority: task.priority || 'medium', due_date: task.due_date }))
@@ -849,11 +857,14 @@ ipcMain.handle('image:save', async (_event, imageData: string, fileName: string,
     const uniqueName = `${timestamp}_${Math.random().toString(36).substr(2, 9)}${ext}`
     const filePath = path.join(imagesDir, uniqueName)
     
+    logger.info('[image:save] Saving file:', uniqueName)
+    logger.info('[image:save] Full path:', filePath)
+    
     const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '')
     const buffer = Buffer.from(base64Data, 'base64')
     fs.writeFileSync(filePath, buffer)
     
-    console.log('[image:save] Image file saved:', uniqueName)
+    logger.info('[image:save] Image file saved:', uniqueName)
     
     try {
       const ocrResult = await extractText(filePath, mainWindow)
@@ -909,6 +920,11 @@ ipcMain.handle('image:load', (_event, imagePath: string) => {
   try {
     const imagesDir = getImagesDir()
     const fullPath = path.join(imagesDir, imagePath)
+    
+    logger.info('[image:load] Requested image path:', imagePath)
+    logger.info('[image:load] Images directory:', imagesDir)
+    logger.info('[image:load] Full path:', fullPath)
+    logger.info('[image:load] File exists:', fs.existsSync(fullPath))
     
     if (!fs.existsSync(fullPath)) {
       return { success: false, error: 'Image not found' }
@@ -1249,4 +1265,13 @@ ipcMain.handle('ocr:retry', async (_event, taskId: number, imagePath: string) =>
     console.error('Failed to retry OCR:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Failed to retry OCR' }
   }
+})
+
+ipcMain.handle('log:openFolder', () => {
+  const logDir = path.join(app.getPath('userData'), 'logs')
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true })
+  }
+  shell.openPath(logDir)
+  return { success: true }
 })

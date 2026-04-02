@@ -37,6 +37,7 @@ declare global {
       getTaskImageOCRInfo: (taskId: number) => Promise<ImageOCRInfo[]>
       getOCRLogs: (limit?: number) => Promise<OCRLog[]>
       retryOCR: (taskId: number, imagePath: string) => Promise<{ success: boolean; error?: string }>
+      openLogFolder: () => Promise<{ success: boolean }>
     }
   }
 }
@@ -205,6 +206,11 @@ export const appApi = {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.checkForUpdates()
+  },
+  openLogFolder: async (): Promise<{ success: boolean }> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.openLogFolder()
   },
 }
 

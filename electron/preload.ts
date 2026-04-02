@@ -171,4 +171,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getTaskImageOCRInfo: (taskId: number): Promise<ImageOCRInfo[]> => ipcRenderer.invoke('ocr:getTaskImageInfo', taskId),
   getOCRLogs: (limit?: number): Promise<OCRLog[]> => ipcRenderer.invoke('ocr:getLogs', limit),
   retryOCR: (taskId: number, imagePath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('ocr:retry', taskId, imagePath),
+
+  openLogFolder: (): Promise<{ success: boolean }> => ipcRenderer.invoke('log:openFolder'),
 })

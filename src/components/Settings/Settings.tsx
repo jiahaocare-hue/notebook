@@ -245,6 +245,32 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
             </p>
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              调试日志
+            </label>
+            <div className="flex items-center gap-2">
+              <p className="text-sm text-gray-600 flex-1">
+                日志文件存储在用户数据目录中
+              </p>
+              <button
+                onClick={async () => {
+                  try {
+                    await appApi.openLogFolder()
+                  } catch (error) {
+                    console.error('Failed to open log folder:', error)
+                  }
+                }}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm whitespace-nowrap"
+              >
+                打开日志文件夹
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-gray-500">
+              日志文件可用于调试问题。如果遇到问题，可以查看日志文件获取详细信息。
+            </p>
+          </div>
+
           <div className="border-t border-gray-200 pt-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
               LLM 配置
