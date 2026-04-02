@@ -3,6 +3,12 @@ import { Task, TaskHistory } from '../../types'
 import { imageApi, taskApi, clipboardApi } from '../../ipc/tasks'
 import { DatePicker } from '../DatePicker'
 
+interface OcrProgress {
+  status: string
+  progress: number
+  message: string
+}
+
 interface TaskDetailProps {
   task: Task
   onDelete: (id: number) => void
@@ -17,6 +23,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   const [newContent, setNewContent] = useState('')
   const [previewImage, setPreviewImage] = useState<string | null>(null)
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle')
+  const [ocrProgress, setOcrProgress] = useState<OcrProgress | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   
   const [history, setHistory] = useState<TaskHistory[]>([])
@@ -25,6 +32,22 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const HISTORY_PAGE_SIZE = 20
+
+  useEffect(() => {
+    if (window.electronAPI?.onOcrProgress) {
+      window.electronAPI.onOcrProgress((progress) => {
+        setOcrProgress(progress)
+        if (progress.status === 'complete' || progress.status === 'error') {
+          setTimeout(() => setOcrProgress(null), 2000)
+        }
+      })
+    }
+    return () => {
+      if (window.electronAPI?.removeOcrProgressListener) {
+        window.electronAPI.removeOcrProgressListener()
+      }
+    }
+  }, [])
 
   const loadHistory = async (offset: number = 0, append: boolean = false) => {
     if (append) {
@@ -266,6 +289,21 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             </button>
+            {ocrProgress && (
+              <div className="flex items-center gap-2 px-3 py-1 bg-blue-50 rounded-lg text-sm text-blue-700">
+                {ocrProgress.status === 'downloading' || ocrProgress.status === 'recognizing' ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                    <span>{ocrProgress.message}</span>
+                    <span className="text-blue-500">({ocrProgress.progress}%)</span>
+                  </>
+                ) : ocrProgress.status === 'complete' ? (
+                  <span className="text-green-600">{ocrProgress.message}</span>
+                ) : (
+                  <span className="text-red-600">{ocrProgress.message}</span>
+                )}
+              </div>
+            )}
             <button
               onClick={handleAddContent}
               disabled={!newContent.trim()}
@@ -303,6 +341,18 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
               
               if (item.action === 'created') {
                 changeText = '创建了任务'
+                try {
+                  const newValue = item.new_value ? JSON.parse(item.new_value) : {}
+                  if (newValue.description) {
+                    const localImgPaths = newValue.description.match(/!\[.*?\]\(local:\/\/[^)]+\)/g) || []
+                    const dataUrlImages = newValue.description.match(/!\[.*?\]\(data:image\/[^)]+\)/g) || []
+                    if (localImgPaths.length + dataUrlImages.length > 0) {
+                      hasImages = true
+                    }
+                  }
+                } catch {
+                  // ignore parse errors
+                }
               } else if (item.action === 'updated') {
                 try {
                   const oldValue = item.old_value ? JSON.parse(item.old_value) : {}

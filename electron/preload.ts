@@ -139,4 +139,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
   checkForUpdates: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('app:checkForUpdates'),
+
+  onOcrProgress: (callback: (progress: { status: string; progress: number; message: string }) => void) => {
+    ipcRenderer.on('ocr:download-progress', (_event, progress) => callback(progress))
+  },
+  removeOcrProgressListener: () => {
+    ipcRenderer.removeAllListeners('ocr:download-progress')
+  },
 })

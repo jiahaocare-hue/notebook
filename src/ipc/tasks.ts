@@ -32,6 +32,8 @@ declare global {
       writeImageToClipboard: (imageData: string) => Promise<{ success: boolean; error?: string }>
       getAppVersion: () => Promise<string>
       checkForUpdates: () => Promise<{ success: boolean; error?: string }>
+      onOcrProgress: (callback: (progress: { status: string; progress: number; message: string }) => void) => void
+      removeOcrProgressListener: () => void
     }
   }
 }

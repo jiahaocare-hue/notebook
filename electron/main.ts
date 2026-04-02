@@ -220,7 +220,7 @@ async function backfillImageTexts() {
           console.log(`Checking image path: ${fullPath}`)
           if (fs.existsSync(fullPath)) {
             console.log(`Processing OCR for task ${task.task_id}, image: ${imagePath}`)
-            const textContent = await extractText(fullPath)
+            const textContent = await extractText(fullPath, mainWindow)
             
             if (textContent) {
               db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content) VALUES (?, ?, ?)').run(task.task_id, imagePath, textContent)
@@ -743,7 +743,7 @@ ipcMain.handle('image:save', async (_event, imageData: string, fileName: string,
     fs.writeFileSync(filePath, buffer)
     
     if (taskId) {
-      const textContent = await extractText(filePath)
+      const textContent = await extractText(filePath, mainWindow)
       if (textContent) {
         db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content) VALUES (?, ?, ?)').run(taskId, uniqueName, textContent)
         console.log(`OCR completed for task ${taskId}, text length: ${textContent.length}`)
