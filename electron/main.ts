@@ -512,10 +512,20 @@ ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: str
 ipcMain.handle('task:delete', (_event, taskId: number) => {
   try {
     const getStmt = db?.prepare('SELECT * FROM tasks WHERE id = ?')
-    const task = getStmt?.get(taskId)
+    const task = getStmt?.get(taskId) as { id: number; description: string | null } | undefined
 
     if (!task) {
       return false
+    }
+
+    const imagesDir = getImagesDir()
+    const imageFiles: string[] = []
+    
+    if (task.description) {
+      const imageMatches = [...task.description.matchAll(/!\[.*?\]\(local:\/\/([^)]+)\)/g)]
+      for (const match of imageMatches) {
+        imageFiles.push(match[1])
+      }
     }
 
     const deleteTransaction = db?.transaction(() => {
@@ -528,6 +538,18 @@ ipcMain.handle('task:delete', (_event, taskId: number) => {
     })
 
     deleteTransaction?.()
+
+    for (const imageFile of imageFiles) {
+      const fullPath = path.join(imagesDir, imageFile)
+      if (fs.existsSync(fullPath)) {
+        try {
+          fs.unlinkSync(fullPath)
+        } catch (e) {
+          logger.error('Failed to delete image file:', fullPath, e)
+        }
+      }
+    }
+
     return true
   } catch (error) {
     logger.error('Failed to delete task:', error)
