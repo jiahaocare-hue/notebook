@@ -1,6 +1,7 @@
 import { logger } from './logger'
 import path from 'path'
 import { app } from 'electron'
+import fs from 'fs'
 
 let embedder: ((text: string, options?: { pooling?: string; normalize?: boolean }) => Promise<unknown>) | null = null
 
@@ -22,13 +23,23 @@ async function getEmbedder() {
       embedderLoading = (async () => {
         logger.info('[Embedding] Loading embedding model...')
         try {
+          const localModelPath = getLocalModelPath()
+          logger.info('[Embedding] Local model path:', localModelPath)
+          
+          const modelDirExists = fs.existsSync(localModelPath)
+          logger.info('[Embedding] Model directory exists:', modelDirExists)
+          
+          if (modelDirExists) {
+            const files = fs.readdirSync(localModelPath)
+            logger.info('[Embedding] Model directory files:', files.join(', '))
+          }
+          
           const transformers = await (eval('import("@xenova/transformers")') as Promise<typeof import('@xenova/transformers')>)
           
           transformers.env.allowLocalModels = true
           transformers.env.useBrowserCache = false
-          
-          const localModelPath = getLocalModelPath()
-          logger.info('[Embedding] Using local model path:', localModelPath)
+          ;(transformers.env as any).localModelOnly = true
+          logger.info('[Embedding] Transformers env configured')
           
           const pipeline = transformers.pipeline
           embedder = await pipeline('feature-extraction', localModelPath, {
