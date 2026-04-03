@@ -1,50 +1,66 @@
+import { logger } from './logger'
+import path from 'path'
+import { app } from 'electron'
+
 let embedder: ((text: string, options?: { pooling?: string; normalize?: boolean }) => Promise<unknown>) | null = null
+
+let embedderLoading: Promise<void> | null = null
+
+const MODEL_NAME = 'BAAI-bge-small-zh-v1d5'
+
+function getLocalModelPath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'models', MODEL_NAME)
+  } else {
+    return path.join(__dirname, '../../resources/models', MODEL_NAME)
+  }
+}
 
 async function getEmbedder() {
   if (!embedder) {
-    console.log('Loading embedding model...')
-    // Use eval to prevent TypeScript from converting import() to require()
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const transformers = await (eval('import("@xenova/transformers")') as Promise<typeof import('@xenova/transformers')>)
-    
-    // Allow local models cache
-    transformers.env.allowLocalModels = true
-    transformers.env.useBrowserCache = false
-    
-    // Use Hugging Face mirror for faster download in China
-    // You can also set HF_ENDPOINT environment variable
-    const hfEndpoint = process.env.HF_ENDPOINT || 'https://hf-mirror.com'
-    transformers.env.remoteHost = hfEndpoint
-    console.log('Using Hugging Face endpoint:', hfEndpoint)
-    
-    const pipeline = transformers.pipeline
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-      quantized: true,
-      progress_callback: (progress: { status: string; loaded?: number; total?: number }) => {
-        if (progress.status === 'downloading') {
-          const percent = progress.total ? Math.round((progress.loaded! / progress.total!) * 100) : 0
-          console.log(`Downloading model: ${percent}%`)
-        } else if (progress.status === 'done') {
-          console.log('Model download complete')
+    if (!embedderLoading) {
+      embedderLoading = (async () => {
+        logger.info('[Embedding] Loading embedding model...')
+        try {
+          const transformers = await (eval('import("@xenova/transformers")') as Promise<typeof import('@xenova/transformers')>)
+          
+          transformers.env.allowLocalModels = true
+          transformers.env.useBrowserCache = false
+          
+          const localModelPath = getLocalModelPath()
+          logger.info('[Embedding] Using local model path:', localModelPath)
+          
+          const pipeline = transformers.pipeline
+          embedder = await pipeline('feature-extraction', localModelPath, {
+            progress_callback: (progress: { status: string }) => {
+              logger.info('[Embedding] Model loading progress:', progress.status)
+            },
+          }) as any
+          logger.info('[Embedding] Model loaded successfully')
+        } catch (error) {
+          logger.error('[Embedding] Failed to load model:', error)
+          throw error
         }
-      },
-    }) as any
-    console.log('Embedding model loaded')
+      })()
+    }
+    await embedderLoading
   }
   return embedder
 }
 
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
+    logger.info('[Embedding] Generating embedding for text length:', text.length)
     const extractor = await getEmbedder()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const output = await (extractor as any)(text, { pooling: 'mean', normalize: true })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tensor = output as any
-    return Array.from(tensor.data as Float32Array)
+    const embedding = Array.from(tensor.data as Float32Array)
+    logger.info('[Embedding] Generated embedding, dimension:', embedding.length)
+    return embedding
   } catch (error) {
-    console.error('Failed to generate embedding:', error)
+    logger.error('[Embedding] Failed to generate embedding:', error)
     throw error
   }
 }

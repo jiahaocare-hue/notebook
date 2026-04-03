@@ -736,13 +736,16 @@ ipcMain.handle('search:semantic', async (_event, query: string, options?: { limi
 })
 
 ipcMain.handle('search:hybrid', async (_event, query: string, options?: { limit?: number; keywordWeight?: number; threshold?: number; startDate?: string; endDate?: string }) => {
+  logger.info('[search:hybrid] Starting search, query:', query)
   const limit = options?.limit || 50
   const keywordWeight = options?.keywordWeight || 0.3
   const semanticWeight = 1 - keywordWeight
   const threshold = options?.threshold || 0.7
 
   try {
+    logger.info('[search:hybrid] Generating embedding for query...')
     const queryEmbedding = await generateEmbedding(query)
+    logger.info('[search:hybrid] Embedding generated, dimension:', queryEmbedding.length)
 
     let keywordSql = `
       SELECT *, 1 as keyword_match from tasks 
@@ -812,7 +815,8 @@ ipcMain.handle('search:hybrid', async (_event, query: string, options?: { limit?
 
     return { tasks: combinedResults }
   } catch (error) {
-    logger.error('Hybrid search error:', error)
+    logger.error('[search:hybrid] Search failed:', error)
+    logger.error('[search:hybrid] Error stack:', error instanceof Error ? error.stack : 'No stack trace')
     return {
       error: error instanceof Error ? error.message : 'Failed to perform hybrid search',
       tasks: []
