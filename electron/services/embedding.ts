@@ -38,14 +38,16 @@ async function getEmbedder() {
           
           transformers.env.allowLocalModels = true
           transformers.env.useBrowserCache = false
+          transformers.env.localModelPath = localModelPath
           ;(transformers.env as any).localModelOnly = true
-          logger.info('[Embedding] Transformers env configured')
+          logger.info('[Embedding] Transformers env configured, localModelPath:', transformers.env.localModelPath)
           
           const pipeline = transformers.pipeline
           embedder = await pipeline('feature-extraction', localModelPath, {
             progress_callback: (progress: { status: string }) => {
               logger.info('[Embedding] Model loading progress:', progress.status)
             },
+            local_files_only: true,
           }) as any
           logger.info('[Embedding] Model loaded successfully')
         } catch (error) {
