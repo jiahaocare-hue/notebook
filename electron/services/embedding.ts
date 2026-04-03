@@ -11,7 +11,7 @@ const MODEL_NAME = 'BAAI-bge-small-zh-v1d5'
 
 function getLocalModelPath(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'models', MODEL_NAME)
+    return path.join(process.resourcesPath, 'resources', 'models', MODEL_NAME)
   } else {
     return path.join(__dirname, '../../resources/models', MODEL_NAME)
   }
