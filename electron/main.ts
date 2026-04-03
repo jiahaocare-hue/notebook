@@ -232,6 +232,18 @@ function initDatabase() {
 
 async function backfillEmbeddings() {
   try {
+    const EXPECTED_DIMENSION = 512
+    
+    const existingEmbedding = db?.prepare('SELECT embedding FROM task_embeddings LIMIT 1').get() as { embedding: string } | undefined
+    
+    if (existingEmbedding?.embedding) {
+      const parsed = JSON.parse(existingEmbedding.embedding)
+      if (Array.isArray(parsed) && parsed.length !== EXPECTED_DIMENSION) {
+        logger.info(`[Migration] Embedding dimension mismatch: ${parsed.length} != ${EXPECTED_DIMENSION}, regenerating all embeddings...`)
+        db?.exec('DELETE FROM task_embeddings')
+      }
+    }
+    
     const tasksWithoutEmbeddings = db?.prepare(`
       SELECT t.id, t.title, t.description 
       FROM tasks t 
@@ -240,9 +252,11 @@ async function backfillEmbeddings() {
     `).all() as { id: number; title: string; description: string | null }[]
 
     if (tasksWithoutEmbeddings && tasksWithoutEmbeddings.length > 0) {
+      logger.info(`[Migration] Regenerating embeddings for ${tasksWithoutEmbeddings.length} tasks...`)
       for (const task of tasksWithoutEmbeddings) {
         await updateTaskEmbedding(task.id, task.title, task.description)
       }
+      logger.info('[Migration] Embedding regeneration complete')
     }
   } catch (error) {
     logger.error('Failed to backfill embeddings:', error)
