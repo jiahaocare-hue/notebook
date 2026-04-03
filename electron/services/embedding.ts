@@ -9,11 +9,11 @@ let embedderLoading: Promise<void> | null = null
 
 const MODEL_NAME = 'BAAI-bge-small-zh-v1d5'
 
-function getLocalModelPath(): string {
+function getModelsDir(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'resources', 'models', MODEL_NAME)
+    return path.join(process.resourcesPath, 'resources', 'models')
   } else {
-    return path.join(__dirname, '../../resources/models', MODEL_NAME)
+    return path.join(__dirname, '../../resources/models')
   }
 }
 
@@ -23,8 +23,10 @@ async function getEmbedder() {
       embedderLoading = (async () => {
         logger.info('[Embedding] Loading embedding model...')
         try {
-          const localModelPath = getLocalModelPath()
-          logger.info('[Embedding] Local model path:', localModelPath)
+          const modelsDir = getModelsDir()
+          const localModelPath = path.join(modelsDir, MODEL_NAME)
+          logger.info('[Embedding] Models directory:', modelsDir)
+          logger.info('[Embedding] Model path:', localModelPath)
           
           const modelDirExists = fs.existsSync(localModelPath)
           logger.info('[Embedding] Model directory exists:', modelDirExists)
@@ -38,12 +40,12 @@ async function getEmbedder() {
           
           transformers.env.allowLocalModels = true
           transformers.env.useBrowserCache = false
-          transformers.env.localModelPath = localModelPath
+          transformers.env.localModelPath = modelsDir
           ;(transformers.env as any).localModelOnly = true
-          logger.info('[Embedding] Transformers env configured, localModelPath:', transformers.env.localModelPath)
+          logger.info('[Embedding] Transformers env configured')
           
           const pipeline = transformers.pipeline
-          embedder = await pipeline('feature-extraction', localModelPath, {
+          embedder = await pipeline('feature-extraction', MODEL_NAME, {
             progress_callback: (progress: { status: string }) => {
               logger.info('[Embedding] Model loading progress:', progress.status)
             },
