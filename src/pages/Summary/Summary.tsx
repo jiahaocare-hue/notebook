@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { TaskStats, CompletedTask, SummaryRequest } from '../../types'
+import { TaskStats, CompletedTask, SummaryRequest, TaskPriority, TaskStatus } from '../../types'
 import { llmApi } from '../../ipc/tasks'
 import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, HeadingLevel } from 'docx'
 
@@ -97,8 +97,8 @@ const Summary: React.FC = () => {
           const taskHistory = await window.electronAPI.getTaskHistory(task.id, { limit: 5 })
           history = taskHistory.map(h => ({
             action: h.action,
-            oldValue: h.old_value,
-            newValue: h.new_value,
+            old_value: h.old_value,
+            new_value: h.new_value,
             timestamp: h.timestamp,
           }))
         } catch (e) {
@@ -108,8 +108,8 @@ const Summary: React.FC = () => {
         return {
           title: task.title,
           description: task.description,
-          priority: task.priority,
-          status: task.status,
+          priority: task.priority as TaskPriority,
+          status: task.status as TaskStatus,
           dueDate: task.due_date,
           createdAt: task.created_at,
           completedAt: task.updated_at,

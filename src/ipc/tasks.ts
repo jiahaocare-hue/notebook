@@ -30,6 +30,7 @@ declare global {
       saveFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: string }) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
       saveBinaryFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: number[] }) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
       writeImageToClipboard: (imageData: string) => Promise<{ success: boolean; error?: string }>
+      readImageFromClipboard: () => Promise<{ image: string | null; error?: string }>
       getAppVersion: () => Promise<string>
       checkForUpdates: () => Promise<{ success: boolean; error?: string }>
       onOcrProgress: (callback: (progress: { status: string; progress: number; message: string }) => void) => void
@@ -193,6 +194,11 @@ export const clipboardApi = {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.writeImageToClipboard(imageData)
+  },
+  readImage: async (): Promise<{ image: string | null; error?: string }> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.readImageFromClipboard()
   },
 }
 

@@ -542,16 +542,27 @@ ipcMain.handle('task:delete', (_event, taskId: number) => {
       }
     }
 
-    const deleteTransaction = db?.transaction(() => {
-      db?.exec('PRAGMA foreign_keys = OFF')
-      db?.prepare('DELETE FROM task_embeddings WHERE task_id = ?').run(taskId)
-      db?.prepare('DELETE FROM task_history WHERE task_id = ?').run(taskId)
-      db?.prepare('DELETE FROM image_texts WHERE task_id = ?').run(taskId)
-      db?.prepare('DELETE FROM tasks WHERE id = ?').run(taskId)
-      db?.exec('PRAGMA foreign_keys = ON')
-    })
+    try {
+      const deleteTransaction = db?.transaction(() => {
+        db?.exec('PRAGMA foreign_keys = OFF')
+        try {
+          db?.prepare('DELETE FROM task_embeddings WHERE task_id = ?').run(taskId)
+          db?.prepare('DELETE FROM task_history WHERE task_id = ?').run(taskId)
+          db?.prepare('DELETE FROM image_texts WHERE task_id = ?').run(taskId)
+          db?.prepare('DELETE FROM tasks WHERE id = ?').run(taskId)
+        } catch (innerError) {
+          logger.error('Database transaction error during task deletion:', innerError)
+          throw innerError
+        } finally {
+          db?.exec('PRAGMA foreign_keys = ON')
+        }
+      })
 
-    deleteTransaction?.()
+      deleteTransaction?.()
+    } catch (transactionError) {
+      logger.error('Failed to delete task from database:', transactionError)
+      return false
+    }
 
     for (const imageFile of imageFiles) {
       const fullPath = path.join(imagesDir, imageFile)
@@ -567,7 +578,7 @@ ipcMain.handle('task:delete', (_event, taskId: number) => {
     return true
   } catch (error) {
     logger.error('Failed to delete task:', error)
-    throw error
+    return false
   }
 })
 
@@ -1172,6 +1183,22 @@ ipcMain.handle('clipboard:writeImage', (_event, imageData: string) => {
   } catch (error) {
     logger.error('Failed to write image to clipboard:', error)
     return { success: false, error: error instanceof Error ? error.message : '复制图片失败' }
+  }
+})
+
+ipcMain.handle('clipboard:readImage', async () => {
+  try {
+    const image = clipboard.readImage()
+    
+    if (image.isEmpty()) {
+      return { image: null, error: '剪贴板中没有图片' }
+    }
+    
+    const dataUrl = image.toDataURL()
+    return { image: dataUrl }
+  } catch (error) {
+    logger.error('Failed to read image from clipboard:', error)
+    return { image: null, error: error instanceof Error ? error.message : '读取图片失败' }
   }
 })
 

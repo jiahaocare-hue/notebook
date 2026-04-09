@@ -1,9 +1,12 @@
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+export type TaskPriority = 'low' | 'medium' | 'high'
+
 export interface Task {
   id: number
   title: string
   description: string | null
-  status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
-  priority: 'low' | 'medium' | 'high'
+  status: TaskStatus
+  priority: TaskPriority
   due_date: string | null
   created_at: string
   updated_at: string
@@ -12,16 +15,16 @@ export interface Task {
 export interface NewTask {
   title: string
   description?: string
-  status?: 'pending' | 'in_progress' | 'completed' | 'cancelled'
-  priority?: 'low' | 'medium' | 'high'
+  status?: TaskStatus
+  priority?: TaskPriority
   due_date?: string
 }
 
 export interface UpdateTask {
   title?: string
   description?: string
-  status?: 'pending' | 'in_progress' | 'completed' | 'cancelled'
-  priority?: 'low' | 'medium' | 'high'
+  status?: TaskStatus
+  priority?: TaskPriority
   due_date?: string
 }
 
@@ -33,6 +36,8 @@ export interface TaskHistory {
   new_value: string | null
   timestamp: string
 }
+
+export type TaskHistoryItem = Omit<TaskHistory, 'id' | 'task_id'>
 
 export type SearchMode = 'keyword' | 'hybrid' | 'image'
 
@@ -85,18 +90,11 @@ export interface TaskStats {
   monthlyDistribution: { month: string; count: number }[]
 }
 
-export interface TaskHistoryItem {
-  action: string
-  oldValue: string | null
-  newValue: string | null
-  timestamp: string
-}
-
 export interface CompletedTask {
   title: string
   description: string | null
-  priority: string
-  status: string
+  priority: TaskPriority
+  status: TaskStatus
   dueDate?: string | null
   createdAt?: string
   completedAt?: string

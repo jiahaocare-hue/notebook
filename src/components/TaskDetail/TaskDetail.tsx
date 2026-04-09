@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { Task, TaskHistory } from '../../types'
 import { imageApi, taskApi, clipboardApi, ocrApi } from '../../ipc/tasks'
 import { DatePicker } from '../DatePicker'
+import ImageViewer from '../ImageViewer'
 
 interface OcrProgress {
   status: string
@@ -60,6 +61,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   const [newContent, setNewContent] = useState('')
   const [previewImage, setPreviewImage] = useState<string | null>(null)
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle')
+  const [pasteStatus, setPasteStatus] = useState<'idle' | 'success' | 'error'>('idle')
   const [ocrProgress, setOcrProgress] = useState<OcrProgress | null>(null)
   const [showOcrComplete, setShowOcrComplete] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -93,7 +95,116 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     }
   }, [])
 
-  const loadHistory = async (offset: number = 0, append: boolean = false) => {
+  const handlePaste = useCallback(async (e: ClipboardEvent) => {
+    const items = e.clipboardData?.items
+    if (items) {
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault()
+          const file = item.getAsFile()
+          if (file) {
+            const reader = new FileReader()
+            reader.onload = async (event) => {
+              const base64 = event.target?.result as string
+              if (base64) {
+                const savedPath = await imageApi.save(base64, file.name, task.id)
+                if (savedPath) {
+                  const imageRef = `![${file.name}](local://${savedPath})`
+                  const hasExistingImages = task.description?.includes('![') || false
+                  const textOnlyDescription = task.description?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
+
+                  let updatedDescription: string
+                  if (textOnlyDescription && !hasExistingImages) {
+                    updatedDescription = `${task.description}\n\n${imageRef}`
+                  } else if (hasExistingImages) {
+                    updatedDescription = `${task.description}\n\n${imageRef}`
+                  } else {
+                    updatedDescription = imageRef
+                  }
+                  onUpdate({ ...task, description: updatedDescription })
+                  setPasteStatus('success')
+                  setTimeout(() => setPasteStatus('idle'), 2000)
+                }
+              }
+            }
+            reader.readAsDataURL(file)
+            return
+          }
+        }
+      }
+    }
+
+    try {
+      const result = await clipboardApi.readImage()
+      if (result.image) {
+        const savedPath = await imageApi.save(result.image, 'pasted-image.png', task.id)
+        if (savedPath) {
+          const imageRef = `![pasted-image.png](local://${savedPath})`
+          const hasExistingImages = task.description?.includes('![') || false
+          const textOnlyDescription = task.description?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
+
+          let updatedDescription: string
+          if (textOnlyDescription && !hasExistingImages) {
+            updatedDescription = `${task.description}\n\n${imageRef}`
+          } else if (hasExistingImages) {
+            updatedDescription = `${task.description}\n\n${imageRef}`
+          } else {
+            updatedDescription = imageRef
+          }
+          onUpdate({ ...task, description: updatedDescription })
+          setPasteStatus('success')
+          setTimeout(() => setPasteStatus('idle'), 2000)
+        }
+      }
+    } catch (error) {
+      console.error('Failed to paste image:', error)
+      setPasteStatus('error')
+      setTimeout(() => setPasteStatus('idle'), 2000)
+    }
+  }, [task, onUpdate])
+
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        try {
+          const result = await clipboardApi.readImage()
+          if (result.image) {
+            const savedPath = await imageApi.save(result.image, 'pasted-image.png', task.id)
+            if (savedPath) {
+              const imageRef = `![pasted-image.png](local://${savedPath})`
+              const hasExistingImages = task.description?.includes('![') || false
+              const textOnlyDescription = task.description?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
+
+              let updatedDescription: string
+              if (textOnlyDescription && !hasExistingImages) {
+                updatedDescription = `${task.description}\n\n${imageRef}`
+              } else if (hasExistingImages) {
+                updatedDescription = `${task.description}\n\n${imageRef}`
+              } else {
+                updatedDescription = imageRef
+              }
+              onUpdate({ ...task, description: updatedDescription })
+              setPasteStatus('success')
+              setTimeout(() => setPasteStatus('idle'), 2000)
+            }
+          }
+        } catch (error) {
+          console.error('Failed to paste image:', error)
+        }
+      }
+    }
+
+    const pasteHandler = (e: Event) => handlePaste(e as ClipboardEvent)
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('paste', pasteHandler)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('paste', pasteHandler)
+    }
+  }, [handlePaste, task, onUpdate])
+
+  const loadHistory = useCallback(async (offset: number = 0, append: boolean = false) => {
     if (append) {
       setLoadingMore(true)
     } else {
@@ -120,17 +231,17 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
       setHistoryLoading(false)
       setLoadingMore(false)
     }
-  }
+  }, [task.id])
 
-  const loadMoreHistory = () => {
+  const loadMoreHistory = useCallback(() => {
     if (!loadingMore && hasMoreHistory) {
       loadHistory(history.length, true)
     }
-  }
+  }, [loadingMore, hasMoreHistory, loadHistory, history.length])
 
   useEffect(() => {
     loadHistory()
-  }, [task.id])
+  }, [loadHistory])
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString + 'Z')
@@ -222,8 +333,18 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
       const savedPath = await imageApi.save(base64, file.name, task.id)
       if (savedPath) {
         const imageRef = `![${file.name}](local://${savedPath})`
-        const updatedTask = { ...task, description: imageRef }
-        onUpdate(updatedTask)
+        const hasExistingImages = task.description?.includes('![') || false
+        const textOnlyDescription = task.description?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
+
+        let updatedDescription: string
+        if (textOnlyDescription && !hasExistingImages) {
+          updatedDescription = `${task.description}\n\n${imageRef}`
+        } else if (hasExistingImages) {
+          updatedDescription = `${task.description}\n\n${imageRef}`
+        } else {
+          updatedDescription = imageRef
+        }
+        onUpdate({ ...task, description: updatedDescription })
       }
     }
     reader.readAsDataURL(file)
@@ -350,6 +471,15 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
             >
               添加
             </button>
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="text-xs text-gray-400">提示：按 Ctrl+V 可直接粘贴图片</span>
+            {pasteStatus === 'success' && (
+              <span className="text-xs text-green-600">图片已粘贴</span>
+            )}
+            {pasteStatus === 'error' && (
+              <span className="text-xs text-red-600">粘贴失败</span>
+            )}
           </div>
         </div>
 
@@ -523,51 +653,16 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
       </div>
 
       {previewImage && (
-        <div 
-          className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
-          onClick={() => {
+        <ImageViewer
+          src={previewImage}
+          alt="预览图片"
+          onClose={() => {
             setPreviewImage(null)
             setCopyStatus('idle')
           }}
-        >
-          <img 
-            src={previewImage} 
-            alt="预览图片"
-            className="max-w-[90vw] max-h-[90vh] object-contain"
-          />
-          <button
-            className="absolute top-4 left-4 text-white hover:text-gray-300 p-2"
-            onClick={(e) => {
-              e.stopPropagation()
-              handleCopyImage()
-            }}
-            title="复制图片"
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </button>
-          {copyStatus !== 'idle' && (
-            <div 
-              className={`absolute top-4 left-16 px-3 py-1 rounded text-sm ${
-                copyStatus === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-              }`}
-            >
-              {copyStatus === 'success' ? '复制成功' : '复制失败'}
-            </div>
-          )}
-          <button
-            className="absolute top-4 right-4 text-white hover:text-gray-300"
-            onClick={() => {
-              setPreviewImage(null)
-              setCopyStatus('idle')
-            }}
-          >
-            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+          onCopy={handleCopyImage}
+          copyStatus={copyStatus}
+        />
       )}
     </div>
   )

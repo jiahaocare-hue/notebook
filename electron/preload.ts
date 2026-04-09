@@ -157,6 +157,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveBinaryFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: number[] }): Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }> => ipcRenderer.invoke('file:saveBinary', options),
 
   writeImageToClipboard: (imageData: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('clipboard:writeImage', imageData),
+  readImageFromClipboard: (): Promise<{ image: string | null; error?: string }> => ipcRenderer.invoke('clipboard:readImage'),
 
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
   checkForUpdates: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('app:checkForUpdates'),

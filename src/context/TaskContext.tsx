@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, ReactNode, useEffect } from 'react'
+import React, { createContext, useContext, useState, useCallback, useMemo, ReactNode, useEffect, useRef } from 'react'
 import { Task, NewTask, UpdateTask } from '../types'
 import { taskApi } from '../ipc/tasks'
 
@@ -47,6 +47,19 @@ export const TaskProvider: React.FC<TaskProviderProps> = ({ children }) => {
     completed: 0,
     cancelled: 0,
   })
+  
+  const abortControllerRef = useRef<AbortController | null>(null)
+  const isMountedRef = useRef(true)
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+    }
+  }, [])
 
   const refreshCounts = useCallback(async (filters?: { date?: string; startDate?: string; endDate?: string }) => {
     try {
@@ -71,16 +84,25 @@ export const TaskProvider: React.FC<TaskProviderProps> = ({ children }) => {
   }, [refreshTotalCounts])
 
   const refreshTasks = useCallback(async (filters?: Record<string, string>, showLoading: boolean = true) => {
-    if (showLoading) {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    abortControllerRef.current = new AbortController()
+    
+    if (showLoading && isMountedRef.current) {
       setLoading(true)
     }
     try {
       const fetchedTasks = await taskApi.list(filters)
-      setTasks(fetchedTasks)
+      if (isMountedRef.current) {
+        setTasks(fetchedTasks)
+      }
     } catch (error) {
-      console.error('Failed to refresh tasks:', error)
+      if (isMountedRef.current) {
+        console.error('Failed to refresh tasks:', error)
+      }
     } finally {
-      if (showLoading) {
+      if (showLoading && isMountedRef.current) {
         setLoading(false)
       }
     }

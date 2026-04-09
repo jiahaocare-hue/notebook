@@ -6,84 +6,78 @@ interface TaskCardProps {
   onClick: (task: Task) => void
 }
 
+const PRIORITY_CONFIGS = {
+  high: {
+    label: '高优先级',
+    bgColor: 'bg-red-50',
+    textColor: 'text-red-600',
+    borderColor: 'border-red-200',
+    dotColor: 'bg-red-500',
+  },
+  medium: {
+    label: '中优先级',
+    bgColor: 'bg-amber-50',
+    textColor: 'text-amber-600',
+    borderColor: 'border-amber-200',
+    dotColor: 'bg-amber-500',
+  },
+  low: {
+    label: '低优先级',
+    bgColor: 'bg-blue-50',
+    textColor: 'text-blue-600',
+    borderColor: 'border-blue-200',
+    dotColor: 'bg-blue-500',
+  },
+}
+
+const STATUS_CONFIGS = {
+  in_progress: {
+    label: '进行中',
+    bgColor: 'bg-blue-50',
+    textColor: 'text-blue-600',
+    dotColor: 'bg-blue-500',
+  },
+  completed: {
+    label: '已完成',
+    bgColor: 'bg-green-50',
+    textColor: 'text-green-600',
+    dotColor: 'bg-green-500',
+  },
+  cancelled: {
+    label: '已取消',
+    bgColor: 'bg-red-50',
+    textColor: 'text-red-600',
+    dotColor: 'bg-red-500',
+  },
+  pending: {
+    label: '待处理',
+    bgColor: 'bg-yellow-50',
+    textColor: 'text-yellow-600',
+    dotColor: 'bg-yellow-500',
+  },
+}
+
+const formatDate = (dateString: string) => {
+  const date = new Date(dateString + 'Z')
+  return date.toLocaleDateString('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'Asia/Shanghai'
+  })
+}
+
+const formatDateTime = (dateString: string) => {
+  const date = new Date(dateString + 'Z')
+  return date.toLocaleDateString('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Asia/Shanghai'
+  })
+}
+
 const TaskCard: React.FC<TaskCardProps> = React.memo(({ task, onClick }) => {
-  const getPriorityConfig = (priority: Task['priority']) => {
-    const configs = {
-      high: {
-        label: '高优先级',
-        bgColor: 'bg-red-50',
-        textColor: 'text-red-600',
-        borderColor: 'border-red-200',
-        dotColor: 'bg-red-500',
-      },
-      medium: {
-        label: '中优先级',
-        bgColor: 'bg-amber-50',
-        textColor: 'text-amber-600',
-        borderColor: 'border-amber-200',
-        dotColor: 'bg-amber-500',
-      },
-      low: {
-        label: '低优先级',
-        bgColor: 'bg-blue-50',
-        textColor: 'text-blue-600',
-        borderColor: 'border-blue-200',
-        dotColor: 'bg-blue-500',
-      },
-    }
-    return configs[priority || 'medium']
-  }
-
-  const getStatusConfig = (status: Task['status']) => {
-    const configs = {
-      in_progress: {
-        label: '进行中',
-        bgColor: 'bg-blue-50',
-        textColor: 'text-blue-600',
-        dotColor: 'bg-blue-500',
-      },
-      completed: {
-        label: '已完成',
-        bgColor: 'bg-green-50',
-        textColor: 'text-green-600',
-        dotColor: 'bg-green-500',
-      },
-      cancelled: {
-        label: '已取消',
-        bgColor: 'bg-red-50',
-        textColor: 'text-red-600',
-        dotColor: 'bg-red-500',
-      },
-      pending: {
-        label: '待处理',
-        bgColor: 'bg-yellow-50',
-        textColor: 'text-yellow-600',
-        dotColor: 'bg-yellow-500',
-      },
-    }
-    return configs[status || 'pending']
-  }
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString + 'Z')
-    return date.toLocaleDateString('zh-CN', {
-      month: 'short',
-      day: 'numeric',
-      timeZone: 'Asia/Shanghai'
-    })
-  }
-
-  const formatDateTime = (dateString: string) => {
-    const date = new Date(dateString + 'Z')
-    return date.toLocaleDateString('zh-CN', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: 'Asia/Shanghai'
-    })
-  }
-
   const displayDescription = useMemo(() => {
     if (!task.description) return ''
     const textOnly = task.description
@@ -93,10 +87,13 @@ const TaskCard: React.FC<TaskCardProps> = React.memo(({ task, onClick }) => {
     return textOnly.length > 80 ? textOnly.substring(0, 80) + '...' : textOnly
   }, [task.description])
 
-  const priorityConfig = getPriorityConfig(task.priority)
-  const statusConfig = getStatusConfig(task.status)
+  const priorityConfig = PRIORITY_CONFIGS[task.priority || 'medium']
+  const statusConfig = STATUS_CONFIGS[task.status || 'pending']
 
-  const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'completed'
+  const isOverdue = useMemo(() => 
+    task.due_date && new Date(task.due_date) < new Date() && task.status !== 'completed',
+    [task.due_date, task.status]
+  )
 
   return (
     <div
