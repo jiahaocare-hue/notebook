@@ -674,39 +674,46 @@ ipcMain.handle('history:getByTaskId', (_event, taskId: number, options?: { limit
 
 ipcMain.handle('search:keyword', (_event, query: string, options?: { fields?: string[]; limit?: number; startDate?: string; endDate?: string }) => {
   const limit = options?.limit || 50
-  const fields = options?.fields || ['title', 'description']
-
-  const conditions: string[] = []
-  const params: string[] = []
-
-  for (const field of fields) {
-    if (['title', 'description'].includes(field)) {
-      conditions.push(`${field} LIKE ?`)
-      params.push(`%${query}%`)
-    }
+  
+  logger.info('[search:keyword] Starting search, query:', query)
+  
+  // Debug: check task_history table
+  const historyCount = db?.prepare('SELECT COUNT(*) as count FROM task_history').get() as { count: number } | undefined
+  logger.info('[search:keyword] Task history count:', historyCount?.count || 0)
+  
+  if (historyCount && historyCount.count > 0) {
+    const sampleHistory = db?.prepare('SELECT task_id, action, old_value, new_value FROM task_history LIMIT 5').all() as { task_id: number; action: string; old_value: string | null; new_value: string | null }[]
+    logger.info('[search:keyword] Sample history records:', JSON.stringify(sampleHistory))
   }
-
-  if (conditions.length === 0) {
-    return []
-  }
-
-  let sql = `SELECT * FROM tasks WHERE ${conditions.join(' OR ')}`
+  
+  let sql = `
+    SELECT DISTINCT t.*
+    FROM tasks t
+    LEFT JOIN task_history h ON t.id = h.task_id
+    WHERE (t.title LIKE ? OR t.description LIKE ? OR (h.old_value IS NOT NULL AND h.old_value LIKE ?) OR (h.new_value IS NOT NULL AND h.new_value LIKE ?))
+  `
+  const params: string[] = [`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`]
+  
+  logger.info('[search:keyword] SQL:', sql)
+  logger.info('[search:keyword] Params:', params)
 
   if (options?.startDate) {
-    sql += " AND date(created_at, 'localtime') >= ?"
+    sql += " AND date(t.created_at, 'localtime') >= ?"
     params.push(options.startDate)
   }
 
   if (options?.endDate) {
-    sql += " AND date(created_at, 'localtime') <= ?"
+    sql += " AND date(t.created_at, 'localtime') <= ?"
     params.push(options.endDate)
   }
 
-  sql += ' ORDER BY created_at DESC LIMIT ?'
+  sql += ' ORDER BY t.created_at DESC LIMIT ?'
   params.push(String(limit))
 
   const stmt = db?.prepare(sql)
-  return stmt?.all(...params) || []
+  const results = stmt?.all(...params) || []
+  logger.info('[search:keyword] Results count:', results.length)
+  return results
 })
 
 ipcMain.handle('search:semantic', async (_event, query: string, options?: { limit?: number; threshold?: number; startDate?: string; endDate?: string }) => {
@@ -773,22 +780,30 @@ ipcMain.handle('search:hybrid', async (_event, query: string, options?: { limit?
     logger.info('[search:hybrid] Embedding generated, dimension:', queryEmbedding.length)
 
     let keywordSql = `
-      SELECT *, 1 as keyword_match from tasks 
-      WHERE title LIKE ? OR description LIKE ?
+      SELECT DISTINCT t.id, t.title, t.description, t.status, t.priority, t.due_date, t.created_at, t.updated_at, 1 as keyword_match 
+      FROM tasks t
+      LEFT JOIN task_history h ON t.id = h.task_id
+      WHERE t.title LIKE ? OR t.description LIKE ? OR (h.old_value IS NOT NULL AND h.old_value LIKE ?) OR (h.new_value IS NOT NULL AND h.new_value LIKE ?)
     `
-    const keywordParams: string[] = [`%${query}%`, `%${query}%`]
+    const keywordParams: string[] = [`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`]
+    logger.info('[search:hybrid] Keyword SQL:', keywordSql)
+    logger.info('[search:hybrid] Keyword params:', keywordParams)
 
     if (options?.startDate) {
-      keywordSql += " AND date(created_at, 'localtime') >= ?"
+      keywordSql += " AND date(t.created_at, 'localtime') >= ?"
       keywordParams.push(options.startDate)
     }
 
     if (options?.endDate) {
-      keywordSql += " AND date(created_at, 'localtime') <= ?"
+      keywordSql += " AND date(t.created_at, 'localtime') <= ?"
       keywordParams.push(options.endDate)
     }
 
     const keywordResults = db?.prepare(keywordSql).all(...keywordParams) as { id: number; title: string; description: string | null; status: string; created_at: string; updated_at: string; keyword_match: number }[]
+    logger.info('[search:hybrid] Keyword results count:', keywordResults?.length || 0)
+    if (keywordResults && keywordResults.length > 0) {
+      logger.info('[search:hybrid] Keyword result IDs:', keywordResults.map(r => r.id).join(', '))
+    }
 
     let embeddingSql = `
       SELECT t.*, e.embedding 

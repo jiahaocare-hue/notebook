@@ -53,6 +53,44 @@ interface TaskDetailProps {
   onUpdate: (task: Task) => void
 }
 
+function insertImageIntoDescription(
+  currentDescription: string | null,
+  imageFileName: string,
+  savedPath: string
+): string {
+  const imageRef = `![${imageFileName}](local://${savedPath})`
+  const hasExistingImages = currentDescription?.includes('![') || false
+  const textOnlyDescription = currentDescription?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
+
+  if (textOnlyDescription && !hasExistingImages) {
+    return `${currentDescription}\n\n${imageRef}`
+  } else if (hasExistingImages) {
+    return `${currentDescription}\n\n${imageRef}`
+  } else {
+    return imageRef
+  }
+}
+
+async function saveAndInsertImage(
+  imageData: string,
+  fileName: string,
+  task: Task,
+  onUpdate: (task: Task) => void
+): Promise<boolean> {
+  try {
+    const savedPath = await imageApi.save(imageData, fileName, task.id)
+    if (savedPath) {
+      const updatedDescription = insertImageIntoDescription(task.description, fileName, savedPath)
+      onUpdate({ ...task, description: updatedDescription })
+      return true
+    }
+    return false
+  } catch (error) {
+    console.error('Failed to insert image:', error)
+    return false
+  }
+}
+
 const TaskDetail: React.FC<TaskDetailProps> = ({
   task,
   onDelete,
@@ -107,21 +145,8 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
             reader.onload = async (event) => {
               const base64 = event.target?.result as string
               if (base64) {
-                const savedPath = await imageApi.save(base64, file.name, task.id)
-                if (savedPath) {
-                  const imageRef = `![${file.name}](local://${savedPath})`
-                  const hasExistingImages = task.description?.includes('![') || false
-                  const textOnlyDescription = task.description?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
-
-                  let updatedDescription: string
-                  if (textOnlyDescription && !hasExistingImages) {
-                    updatedDescription = `${task.description}\n\n${imageRef}`
-                  } else if (hasExistingImages) {
-                    updatedDescription = `${task.description}\n\n${imageRef}`
-                  } else {
-                    updatedDescription = imageRef
-                  }
-                  onUpdate({ ...task, description: updatedDescription })
+                const success = await saveAndInsertImage(base64, file.name, task, onUpdate)
+                if (success) {
                   setPasteStatus('success')
                   setTimeout(() => setPasteStatus('idle'), 2000)
                 }
@@ -137,21 +162,8 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     try {
       const result = await clipboardApi.readImage()
       if (result.image) {
-        const savedPath = await imageApi.save(result.image, 'pasted-image.png', task.id)
-        if (savedPath) {
-          const imageRef = `![pasted-image.png](local://${savedPath})`
-          const hasExistingImages = task.description?.includes('![') || false
-          const textOnlyDescription = task.description?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
-
-          let updatedDescription: string
-          if (textOnlyDescription && !hasExistingImages) {
-            updatedDescription = `${task.description}\n\n${imageRef}`
-          } else if (hasExistingImages) {
-            updatedDescription = `${task.description}\n\n${imageRef}`
-          } else {
-            updatedDescription = imageRef
-          }
-          onUpdate({ ...task, description: updatedDescription })
+        const success = await saveAndInsertImage(result.image, 'pasted-image.png', task, onUpdate)
+        if (success) {
           setPasteStatus('success')
           setTimeout(() => setPasteStatus('idle'), 2000)
         }
@@ -164,42 +176,10 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   }, [task, onUpdate])
 
   useEffect(() => {
-    const handleKeyDown = async (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-        try {
-          const result = await clipboardApi.readImage()
-          if (result.image) {
-            const savedPath = await imageApi.save(result.image, 'pasted-image.png', task.id)
-            if (savedPath) {
-              const imageRef = `![pasted-image.png](local://${savedPath})`
-              const hasExistingImages = task.description?.includes('![') || false
-              const textOnlyDescription = task.description?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
-
-              let updatedDescription: string
-              if (textOnlyDescription && !hasExistingImages) {
-                updatedDescription = `${task.description}\n\n${imageRef}`
-              } else if (hasExistingImages) {
-                updatedDescription = `${task.description}\n\n${imageRef}`
-              } else {
-                updatedDescription = imageRef
-              }
-              onUpdate({ ...task, description: updatedDescription })
-              setPasteStatus('success')
-              setTimeout(() => setPasteStatus('idle'), 2000)
-            }
-          }
-        } catch (error) {
-          console.error('Failed to paste image:', error)
-        }
-      }
-    }
-
     const pasteHandler = (e: Event) => handlePaste(e as ClipboardEvent)
 
-    window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('paste', pasteHandler)
     return () => {
-      window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('paste', pasteHandler)
     }
   }, [handlePaste, task, onUpdate])
@@ -330,22 +310,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
       const base64 = event.target?.result as string
       if (!base64) return
 
-      const savedPath = await imageApi.save(base64, file.name, task.id)
-      if (savedPath) {
-        const imageRef = `![${file.name}](local://${savedPath})`
-        const hasExistingImages = task.description?.includes('![') || false
-        const textOnlyDescription = task.description?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
-
-        let updatedDescription: string
-        if (textOnlyDescription && !hasExistingImages) {
-          updatedDescription = `${task.description}\n\n${imageRef}`
-        } else if (hasExistingImages) {
-          updatedDescription = `${task.description}\n\n${imageRef}`
-        } else {
-          updatedDescription = imageRef
-        }
-        onUpdate({ ...task, description: updatedDescription })
-      }
+      await saveAndInsertImage(base64, file.name, task, onUpdate)
     }
     reader.readAsDataURL(file)
     
