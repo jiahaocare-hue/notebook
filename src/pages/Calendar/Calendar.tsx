@@ -348,6 +348,7 @@ const CalendarPage: React.FC = () => {
       >
         {selectedTask && (
           <TaskDetail
+            key={selectedTask.id}
             task={selectedTask}
             onDelete={handleDeleteTask}
             onUpdate={handleTaskUpdate}

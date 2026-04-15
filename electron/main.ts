@@ -512,6 +512,7 @@ ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: str
   updateStmt?.run(...values)
 
   const action = task.status !== undefined && task.status !== oldTask.status ? 'status_changed' : 'updated'
+  logger.info('[task:update] Adding history record, action:', action, 'changes:', JSON.stringify(changes))
   addHistoryRecord(taskId, action, JSON.stringify(changes.old), JSON.stringify(changes.new))
 
   if (task.title !== undefined || task.description !== undefined) {

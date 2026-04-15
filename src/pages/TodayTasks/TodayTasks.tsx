@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Task, NewTask, UpdateTask, StatusFilter, DateFilter } from '../../types'
 import { useTaskContext } from '../../context/TaskContext'
 import TaskCard from '../../components/TaskCard'
@@ -205,14 +205,26 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
     }
   }
 
+  // 使用 ref 来跟踪是否应该保持 selectedTask，避免刷新时丢失
+  const selectedTaskRef = useRef(selectedTask)
+  
+  // 同步更新 ref
   useEffect(() => {
-    if (selectedTask) {
-      const latestTask = tasks.find(t => t.id === selectedTask.id)
+    selectedTaskRef.current = selectedTask
+  }, [selectedTask])
+  
+  useEffect(() => {
+    const currentTask = selectedTaskRef.current
+    if (currentTask) {
+      const latestTask = tasks.find(t => t.id === currentTask.id)
       if (latestTask) {
         setSelectedTask(latestTask)
+        selectedTaskRef.current = latestTask
       }
+      // 关键修复：即使 latestTask 临时为空（刷新中间状态），也不清除 selectedTask
+      // 这样可以避免 TaskDetail 卸载导致 history 状态重置的问题
     }
-  }, [tasks, selectedTask?.id])
+  }, [tasks])
 
   const handleFormSubmit = async (data: NewTask | UpdateTask) => {
     try {
@@ -417,6 +429,7 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       >
         {selectedTask && (
           <TaskDetail
+            key={selectedTask.id}
             task={selectedTask}
             onDelete={handleDeleteTask}
             onUpdate={handleTaskUpdate}

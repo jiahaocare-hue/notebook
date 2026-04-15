@@ -249,6 +249,7 @@ const Search: React.FC = () => {
           }}
         >
           <TaskDetail
+            key={selectedTask.id}
             task={selectedTask}
             onDelete={handleTaskDelete}
             onUpdate={handleTaskUpdate}

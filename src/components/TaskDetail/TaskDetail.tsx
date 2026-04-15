@@ -59,13 +59,10 @@ function insertImageIntoDescription(
   savedPath: string
 ): string {
   const imageRef = `![${imageFileName}](local://${savedPath})`
-  const hasExistingImages = currentDescription?.includes('![') || false
   const textOnlyDescription = currentDescription?.replace(/!\[.*?\]\(.*?\)/g, '').trim() || ''
 
-  if (textOnlyDescription && !hasExistingImages) {
-    return `${currentDescription}\n\n${imageRef}`
-  } else if (hasExistingImages) {
-    return `${currentDescription}\n\n${imageRef}`
+  if (textOnlyDescription) {
+    return `${textOnlyDescription}\n\n${imageRef}`
   } else {
     return imageRef
   }
@@ -103,6 +100,12 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   const [ocrProgress, setOcrProgress] = useState<OcrProgress | null>(null)
   const [showOcrComplete, setShowOcrComplete] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const taskRef = useRef(task)
+  const isProcessingRef = useRef(false)
+  
+  useEffect(() => {
+    taskRef.current = task
+  }, [task])
   
   const [history, setHistory] = useState<TaskHistory[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -134,55 +137,66 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   }, [])
 
   const handlePaste = useCallback(async (e: ClipboardEvent) => {
-    const items = e.clipboardData?.items
-    if (items) {
-      for (const item of items) {
-        if (item.type.startsWith('image/')) {
-          e.preventDefault()
-          const file = item.getAsFile()
-          if (file) {
-            const reader = new FileReader()
-            reader.onload = async (event) => {
-              const base64 = event.target?.result as string
-              if (base64) {
-                const success = await saveAndInsertImage(base64, file.name, task, onUpdate)
-                if (success) {
-                  setPasteStatus('success')
-                  setTimeout(() => setPasteStatus('idle'), 2000)
+    if (isProcessingRef.current) {
+      return
+    }
+    
+    isProcessingRef.current = true
+    
+    try {
+      const currentTask = taskRef.current
+      const items = e.clipboardData?.items
+      if (items) {
+        for (const item of items) {
+          if (item.type.startsWith('image/')) {
+            e.preventDefault()
+            const file = item.getAsFile()
+            if (file) {
+              const reader = new FileReader()
+              reader.onload = async (event) => {
+                const base64 = event.target?.result as string
+                if (base64) {
+                  const success = await saveAndInsertImage(base64, file.name, currentTask, onUpdate)
+                  if (success) {
+                    setPasteStatus('success')
+                    setTimeout(() => setPasteStatus('idle'), 2000)
+                  }
                 }
+                isProcessingRef.current = false
               }
+              reader.readAsDataURL(file)
+              return
             }
-            reader.readAsDataURL(file)
-            return
           }
         }
       }
-    }
 
-    try {
-      const result = await clipboardApi.readImage()
-      if (result.image) {
-        const success = await saveAndInsertImage(result.image, 'pasted-image.png', task, onUpdate)
-        if (success) {
-          setPasteStatus('success')
-          setTimeout(() => setPasteStatus('idle'), 2000)
+      try {
+        const result = await clipboardApi.readImage()
+        if (result.image) {
+          const success = await saveAndInsertImage(result.image, 'pasted-image.png', currentTask, onUpdate)
+          if (success) {
+            setPasteStatus('success')
+            setTimeout(() => setPasteStatus('idle'), 2000)
+          }
         }
+      } catch (error) {
+        console.error('Failed to paste image:', error)
+        setPasteStatus('error')
+        setTimeout(() => setPasteStatus('idle'), 2000)
       }
-    } catch (error) {
-      console.error('Failed to paste image:', error)
-      setPasteStatus('error')
-      setTimeout(() => setPasteStatus('idle'), 2000)
+    } finally {
+      isProcessingRef.current = false
     }
-  }, [task, onUpdate])
+  }, [onUpdate])
 
   useEffect(() => {
     const pasteHandler = (e: Event) => handlePaste(e as ClipboardEvent)
-
     window.addEventListener('paste', pasteHandler)
     return () => {
       window.removeEventListener('paste', pasteHandler)
     }
-  }, [handlePaste, task, onUpdate])
+  }, [handlePaste])
 
   const loadHistory = useCallback(async (offset: number = 0, append: boolean = false) => {
     if (append) {
@@ -205,7 +219,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
         setHistory(data)
       }
     } catch (err) {
-      console.error('Failed to load task history:', err)
+      console.error('[loadHistory] Failed to load task history:', err)
       setHistoryError(err instanceof Error ? err.message : '加载历史记录失败')
     } finally {
       setHistoryLoading(false)
@@ -221,7 +235,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
 
   useEffect(() => {
     loadHistory()
-  }, [loadHistory])
+  }, [task.id, task.updated_at, loadHistory])
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString + 'Z')
@@ -300,19 +314,33 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     const file = e.target.files?.[0]
     if (!file) return
 
+    if (isProcessingRef.current) {
+      return
+    }
+    
+    isProcessingRef.current = true
+    const currentTask = taskRef.current
+
     if (!file.type.startsWith('image/')) {
       alert('请选择图片文件')
+      isProcessingRef.current = false
       return
     }
 
-    const reader = new FileReader()
-    reader.onload = async (event) => {
-      const base64 = event.target?.result as string
-      if (!base64) return
+    try {
+      const reader = new FileReader()
+      reader.onload = async (event) => {
+        const base64 = event.target?.result as string
+        if (!base64) return
 
-      await saveAndInsertImage(base64, file.name, task, onUpdate)
+        await saveAndInsertImage(base64, file.name, currentTask, onUpdate)
+        isProcessingRef.current = false
+      }
+      reader.readAsDataURL(file)
+    } catch (error) {
+      console.error('handleImageSelect error:', error)
+      isProcessingRef.current = false
     }
-    reader.readAsDataURL(file)
     
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -471,7 +499,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
           <div className="space-y-2">
             {history.map((item) => {
               let changeText = ''
-              let hasImages = false
+              let addedImages: string[] = []
               
               if (item.action === 'created') {
                 try {
@@ -481,9 +509,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                   if (newValue.description) {
                     const localImgPaths = newValue.description.match(/!\[.*?\]\(local:\/\/[^)]+\)/g) || []
                     const dataUrlImages = newValue.description.match(/!\[.*?\]\(data:image\/[^)]+\)/g) || []
-                    if (localImgPaths.length + dataUrlImages.length > 0) {
-                      hasImages = true
-                    }
+                    addedImages = [...localImgPaths, ...dataUrlImages]
                     
                     const textContent = newValue.description
                       .replace(/!\[.*?\]\(local:\/\/[^)]+\)/g, '')
@@ -509,18 +535,24 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                   }
                   if (oldValue.description !== newValue.description) {
                     if (newValue.description) {
+                      const oldLocalImgPaths = oldValue.description?.match(/!\[.*?\]\(local:\/\/[^)]+\)/g) || []
+                      const oldDataUrlImages = oldValue.description?.match(/!\[.*?\]\(data:image\/[^)]+\)/g) || []
+                      const oldImages = new Set([...oldLocalImgPaths, ...oldDataUrlImages])
+                      
                       const newLocalImgPaths = newValue.description.match(/!\[.*?\]\(local:\/\/[^)]+\)/g) || []
                       const newDataUrlImages = newValue.description.match(/!\[.*?\]\(data:image\/[^)]+\)/g) || []
+                      const allNewImages = [...newLocalImgPaths, ...newDataUrlImages]
                       
-                      const totalImages = newLocalImgPaths.length + newDataUrlImages.length
-                      if (totalImages > 0) {
-                        hasImages = true
+                      addedImages = allNewImages.filter(img => !oldImages.has(img))
+                      
+                      const oldTextContent = oldValue.description?.replace(/!\[.*?\]\(local:\/\/[^)]+\)/g, '').replace(/!\[.*?\]\(data:image\/[^)]+\)/g, '').trim() || ''
+                      const newTextContent = newValue.description.replace(/!\[.*?\]\(local:\/\/[^)]+\)/g, '').replace(/!\[.*?\]\(data:image\/[^)]+\)/g, '').trim()
+                      
+                      if (newTextContent && newTextContent !== oldTextContent) {
+                        changes.push(newTextContent)
                       }
-                      
-                      const textContent = newValue.description.replace(/!\[.*?\]\(local:\/\/[^)]+\)/g, '').replace(/!\[.*?\]\(data:image\/[^)]+\)/g, '').trim()
-                      
-                      if (textContent) {
-                        changes.push(textContent)
+                      if (addedImages.length > 0) {
+                        changes.push(`添加了${addedImages.length}张图片`)
                       }
                     } else {
                       changes.push('清空了描述')
@@ -587,8 +619,8 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                   <div className="w-2 h-2 mt-1.5 rounded-full bg-blue-400 flex-shrink-0" />
                   <div className="flex-1">
                     <p className="text-gray-700">{changeText}</p>
-                    {hasImages && item.new_value && (
-                      <HistoryImages newValue={item.new_value} onImageClick={setPreviewImage} taskId={task.id} />
+                    {addedImages.length > 0 && (
+                      <HistoryImages addedImages={addedImages} onImageClick={setPreviewImage} taskId={task.id} />
                     )}
                     <p className="text-gray-400 text-xs mt-0.5">{formatDate(item.timestamp)}</p>
                   </div>
@@ -784,8 +816,8 @@ const TaskDescription: React.FC<{ description: string; onImageClick: (url: strin
   )
 }
 
-const HistoryImages = React.memo<{ newValue: string; onImageClick: (url: string) => void; taskId: number }>(
-  ({ newValue, onImageClick, taskId }) => {
+const HistoryImages = React.memo<{ addedImages: string[]; onImageClick: (url: string) => void; taskId: number }>(
+  ({ addedImages, onImageClick, taskId }) => {
     const [historyImages, setHistoryImages] = useState<{ path: string; dataUrl: string; error: boolean }[]>([])
     const [loading, setLoading] = useState(true)
     const [ocrInfo, setOcrInfo] = useState<Map<string, ImageOCRInfo>>(new Map())
@@ -827,19 +859,12 @@ const HistoryImages = React.memo<{ newValue: string; onImageClick: (url: string)
       const loadHistoryImages = async () => {
         try {
           setLoading(true)
-          const data = JSON.parse(newValue)
-          if (data.description) {
-            const loaded: { path: string; dataUrl: string; error: boolean }[] = []
-            
-            const localRegex = /!\[.*?\]\(local:\/\/([^)]+)\)/g
-            let match
-            const localPaths: string[] = []
-            while ((match = localRegex.exec(data.description)) !== null) {
-              localPaths.push(match[1])
-            }
-            
-            const uniqueLocalPaths = [...new Set(localPaths)].slice(0, 3)
-            for (const path of uniqueLocalPaths) {
+          const loaded: { path: string; dataUrl: string; error: boolean }[] = []
+          
+          for (const imgRef of addedImages.slice(0, 3)) {
+            const localMatch = imgRef.match(/!\[.*?\]\(local:\/\/([^)]+)\)/)
+            if (localMatch) {
+              const path = localMatch[1]
               try {
                 const dataUrl = await imageApi.load(path)
                 if (dataUrl) {
@@ -850,25 +875,25 @@ const HistoryImages = React.memo<{ newValue: string; onImageClick: (url: string)
               } catch {
                 loaded.push({ path, dataUrl: '', error: true })
               }
+              continue
             }
             
-            const dataUrlRegex = /!\[.*?\]\((data:image\/[^)]+)\)/g
-            while ((match = dataUrlRegex.exec(data.description)) !== null) {
-              if (loaded.length >= 3) break
-              loaded.push({ path: match[1].substring(0, 50), dataUrl: match[1], error: false })
+            const dataUrlMatch = imgRef.match(/!\[.*?\]\((data:image\/[^)]+)\)/)
+            if (dataUrlMatch) {
+              loaded.push({ path: dataUrlMatch[1].substring(0, 50), dataUrl: dataUrlMatch[1], error: false })
             }
-            
-            setHistoryImages(loaded)
-            
-            if (loaded.length > 0) {
-              try {
-                const ocrData = await ocrApi.getTaskImageInfo(taskId)
-                const ocrMap = new Map<string, ImageOCRInfo>()
-                ocrData.forEach(info => ocrMap.set(info.image_path, info))
-                setOcrInfo(ocrMap)
-              } catch (e) {
-                console.error('Failed to load OCR info:', e)
-              }
+          }
+          
+          setHistoryImages(loaded)
+          
+          if (loaded.length > 0) {
+            try {
+              const ocrData = await ocrApi.getTaskImageInfo(taskId)
+              const ocrMap = new Map<string, ImageOCRInfo>()
+              ocrData.forEach(info => ocrMap.set(info.image_path, info))
+              setOcrInfo(ocrMap)
+            } catch (e) {
+              console.error('Failed to load OCR info:', e)
             }
           }
         } catch (e) {
@@ -878,7 +903,7 @@ const HistoryImages = React.memo<{ newValue: string; onImageClick: (url: string)
         }
       }
       loadHistoryImages()
-    }, [newValue, taskId])
+    }, [addedImages, taskId])
 
     if (loading) {
       return (

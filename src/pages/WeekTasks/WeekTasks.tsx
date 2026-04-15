@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Task, NewTask, UpdateTask, StatusFilter } from '../../types'
 import { taskApi } from '../../ipc/tasks'
 import TaskCard from '../../components/TaskCard'
@@ -136,14 +136,22 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
     }
   }
 
+  const selectedTaskRef = useRef(selectedTask)
+  
   useEffect(() => {
-    if (selectedTask) {
-      const latestTask = tasks.find(t => t.id === selectedTask.id)
+    selectedTaskRef.current = selectedTask
+  }, [selectedTask])
+  
+  useEffect(() => {
+    const currentTask = selectedTaskRef.current
+    if (currentTask) {
+      const latestTask = tasks.find(t => t.id === currentTask.id)
       if (latestTask) {
         setSelectedTask(latestTask)
+        selectedTaskRef.current = latestTask
       }
     }
-  }, [tasks, selectedTask?.id])
+  }, [tasks])
 
   const handleFormSubmit = async (data: NewTask | UpdateTask) => {
     try {
@@ -345,6 +353,7 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
       >
         {selectedTask && (
           <TaskDetail
+            key={selectedTask.id}
             task={selectedTask}
             onDelete={handleDeleteTask}
             onUpdate={handleTaskUpdate}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Task, NewTask, UpdateTask, StatusFilter } from '../../types'
 import { taskApi } from '../../ipc/tasks'
 import { useTaskContext } from '../../context/TaskContext'
@@ -97,14 +97,22 @@ const HistoryTasks: React.FC<HistoryTasksProps> = ({ statusFilter = 'all' }) => 
     }
   }
 
+  const selectedTaskRef = useRef(selectedTask)
+  
   useEffect(() => {
-    if (selectedTask) {
-      const latestTask = tasks.find(t => t.id === selectedTask.id)
+    selectedTaskRef.current = selectedTask
+  }, [selectedTask])
+  
+  useEffect(() => {
+    const currentTask = selectedTaskRef.current
+    if (currentTask) {
+      const latestTask = tasks.find(t => t.id === currentTask.id)
       if (latestTask) {
         setSelectedTask(latestTask)
+        selectedTaskRef.current = latestTask
       }
     }
-  }, [tasks, selectedTask?.id])
+  }, [tasks])
 
   const handleFormSubmit = async (data: NewTask | UpdateTask) => {
     try {
@@ -198,6 +206,7 @@ const HistoryTasks: React.FC<HistoryTasksProps> = ({ statusFilter = 'all' }) => 
       >
         {selectedTask && (
           <TaskDetail
+            key={selectedTask.id}
             task={selectedTask}
             onDelete={handleDeleteTask}
             onUpdate={handleTaskUpdate}
