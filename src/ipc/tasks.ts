@@ -1,5 +1,7 @@
 import { Task, NewTask, UpdateTask, TaskHistory, TaskFilters, SearchMode, SearchOptions, SummaryRequest } from '../types'
 
+export type TaskWithHistory = Task & { history: TaskHistory[] }
+
 declare global {
   interface Window {
     electronAPI: {
@@ -8,6 +10,7 @@ declare global {
       deleteTask: (taskId: number) => Promise<boolean>
       getTask: (taskId: number) => Promise<Task | undefined>
       listTasks: (filters?: TaskFilters) => Promise<Task[]>
+      listTasksWithHistory: (filters?: { startDate?: string; endDate?: string }) => Promise<TaskWithHistory[]>
       getCounts: (filters?: { date?: string; startDate?: string; endDate?: string }) => Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }>
       getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }) => Promise<TaskHistory[]>
       searchKeyword: (query: string, options?: SearchOptions) => Promise<Task[]>
@@ -96,6 +99,11 @@ export const taskApi = {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.listTasks(filters)
+  },
+  listWithHistory: async (filters?: { startDate?: string; endDate?: string }): Promise<TaskWithHistory[]> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.listTasksWithHistory(filters)
   },
   getCounts: async (filters?: { date?: string; startDate?: string; endDate?: string }): Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }> => {
     const api = getElectronAPI()

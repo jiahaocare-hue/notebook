@@ -3,6 +3,100 @@ import { TaskStats, CompletedTask, SummaryRequest, TaskPriority, TaskStatus } fr
 import { llmApi } from '../../ipc/tasks'
 import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, HeadingLevel } from 'docx'
 
+const statusLabelMap: Record<string, string> = {
+  pending: '待处理',
+  in_progress: '进行中',
+  completed: '已完成',
+  cancelled: '已取消',
+}
+
+const priorityLabelMap: Record<string, string> = {
+  high: '高',
+  medium: '中',
+  low: '低',
+}
+
+const stripImageMarks = (text: string): string => {
+  return text
+    .replace(/!\[.*?\]\(local:\/\/[^)]+\)/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+const formatHistoryEntry = (entry: { action: string; old_value: string | null; new_value: string | null; timestamp: string }): string => {
+  const datePrefix = entry.timestamp.split('T')[0] + ': '
+
+  if (entry.action === 'created') {
+    const details: string[] = []
+    try {
+      const newObj = entry.new_value ? JSON.parse(entry.new_value) : {}
+      if (newObj.title) details.push(`标题: ${newObj.title}`)
+      if (newObj.status) details.push(`状态: ${statusLabelMap[newObj.status] || newObj.status}`)
+      if (newObj.priority) details.push(`优先级: ${priorityLabelMap[newObj.priority] || newObj.priority}`)
+      if (newObj.due_date) details.push(`截止日期: ${newObj.due_date}`)
+    } catch {
+      // ignore
+    }
+    return datePrefix + '创建任务' + (details.length > 0 ? `（${details.join('，')}）` : '')
+  }
+
+  if (entry.action === 'status_changed') {
+    let oldStatus = ''
+    let newStatus = ''
+    try {
+      const oldObj = entry.old_value ? JSON.parse(entry.old_value) : {}
+      const newObj = entry.new_value ? JSON.parse(entry.new_value) : {}
+      oldStatus = statusLabelMap[oldObj.status] || oldObj.status || ''
+      newStatus = statusLabelMap[newObj.status] || newObj.status || ''
+    } catch {
+      oldStatus = entry.old_value || ''
+      newStatus = entry.new_value || ''
+    }
+    return datePrefix + `状态从 '${oldStatus}' 变更为 '${newStatus}'`
+  }
+
+  if (entry.action === 'updated') {
+    const changes: string[] = []
+    try {
+      const oldObj = entry.old_value ? JSON.parse(entry.old_value) : {}
+      const newObj = entry.new_value ? JSON.parse(entry.new_value) : {}
+      const allKeys = new Set([...Object.keys(oldObj), ...Object.keys(newObj)])
+      allKeys.forEach(key => {
+        if (oldObj[key] !== newObj[key]) {
+          const fieldLabels: Record<string, string> = {
+            title: '标题',
+            description: '描述',
+            priority: '优先级',
+            status: '状态',
+            due_date: '截止日期',
+          }
+          const label = fieldLabels[key] || key
+          if (key === 'description') {
+            const oldDesc = oldObj[key] ? stripImageMarks(String(oldObj[key])) : '(空)'
+            const newDesc = newObj[key] ? stripImageMarks(String(newObj[key])) : '(空)'
+            changes.push(`描述从 '${oldDesc}' 变更为 '${newDesc}'`)
+          } else if (key === 'priority') {
+            const oldLabel = priorityLabelMap[oldObj[key]] || oldObj[key]
+            const newLabel = priorityLabelMap[newObj[key]] || newObj[key]
+            changes.push(`${label}从 '${oldLabel}' 变更为 '${newLabel}'`)
+          } else if (key === 'status') {
+            const oldLabel = statusLabelMap[oldObj[key]] || oldObj[key]
+            const newLabel = statusLabelMap[newObj[key]] || newObj[key]
+            changes.push(`${label}从 '${oldLabel}' 变更为 '${newLabel}'`)
+          } else {
+            changes.push(`${label}从 '${oldObj[key]}' 变更为 '${newObj[key]}'`)
+          }
+        }
+      })
+    } catch {
+      changes.push('任务已更新')
+    }
+    return datePrefix + (changes.length > 0 ? changes.join('，') : '任务已更新')
+  }
+
+  return datePrefix + entry.action
+}
+
 type TimeRangeType = 'year' | 'week' | 'custom'
 
 interface DateRange {
@@ -58,6 +152,7 @@ const Summary: React.FC = () => {
   const [inProgressTasks, setInProgressTasks] = useState<CompletedTask[]>([])
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [exportingTaskData, setExportingTaskData] = useState(false)
   const [summary, setSummary] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
 
@@ -357,16 +452,17 @@ const Summary: React.FC = () => {
         sections: [{ children }],
       })
       
-      const buffer = await Packer.toBuffer(doc)
-      
-      const fileName = timeRangeType === 'week' 
+      const blob = await Packer.toBlob(doc)
+      const arrayBuffer = await blob.arrayBuffer()
+
+      const fileName = timeRangeType === 'week'
         ? `周度工作总结_${startDate}_${endDate}.docx`
         : `年度工作总结_${selectedYear}.docx`
-      
+
       const result = await window.electronAPI.saveBinaryFile({
         defaultPath: fileName,
         filters: [{ name: 'Word Document', extensions: ['docx'] }],
-        content: Array.from(new Uint8Array(buffer)),
+        content: Array.from(new Uint8Array(arrayBuffer)),
       })
       
       if (result.success) {
@@ -718,16 +814,17 @@ const Summary: React.FC = () => {
         sections: [{ children }],
       })
       
-      const buffer = await Packer.toBuffer(doc)
-      
-      const fileName = timeRangeType === 'week' 
+      const blob = await Packer.toBlob(doc)
+      const arrayBuffer = await blob.arrayBuffer()
+
+      const fileName = timeRangeType === 'week'
         ? `周度总结_${startDate}_${endDate}.docx`
         : `年度总结_${selectedYear}.docx`
-      
+
       const result = await window.electronAPI.saveBinaryFile({
         defaultPath: fileName,
         filters: [{ name: 'Word Document', extensions: ['docx'] }],
-        content: Array.from(new Uint8Array(buffer)),
+        content: Array.from(new Uint8Array(arrayBuffer)),
       })
       
       if (result.success) {
@@ -739,6 +836,207 @@ const Summary: React.FC = () => {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '导出失败')
+    }
+  }
+
+  const handleExportTaskDataMarkdown = async () => {
+    setExportingTaskData(true)
+    setError(null)
+
+    try {
+      const { startDate, endDate } = getDateRange()
+      const tasks = await window.electronAPI.listTasksWithHistory({ startDate, endDate })
+
+      if (tasks.length === 0) {
+        setError('该时间范围内没有任务数据')
+        return
+      }
+
+      let content = `# 任务数据导出\n\n`
+      content += `**时间范围**：${startDate} 至 ${endDate}\n\n`
+      content += `---\n\n`
+
+      tasks.forEach((task, index) => {
+        content += `## ${index + 1}. ${task.title}\n\n`
+        content += `- **创建时间**：${task.created_at.split('T')[0]}\n`
+        content += `- **优先级**：${priorityLabelMap[task.priority] || task.priority}\n`
+        content += `- **状态**：${statusLabelMap[task.status] || task.status}\n`
+        content += `- **截止日期**：${task.due_date || '无'}\n\n`
+
+        if (task.description) {
+          content += `**描述**：\n${stripImageMarks(task.description)}\n\n`
+        }
+
+        if (task.history && task.history.length > 0) {
+          content += `**变更历史**：\n`
+          task.history.forEach(h => {
+            content += `- ${formatHistoryEntry(h)}\n`
+          })
+          content += `\n`
+        }
+
+        content += `---\n\n`
+      })
+
+      content += `*导出时间: ${new Date().toLocaleString('zh-CN')}*\n`
+
+      const result = await window.electronAPI.saveFile({
+        defaultPath: `任务数据_${startDate}_${endDate}.md`,
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+        content,
+      })
+
+      if (result.success) {
+        alert(`文件已保存到: ${result.filePath}`)
+      } else if (!result.cancelled) {
+        setError(result.error || '保存文件失败')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '导出失败')
+    } finally {
+      setExportingTaskData(false)
+    }
+  }
+
+  const handleExportTaskDataWord = async () => {
+    setExportingTaskData(true)
+    setError(null)
+
+    try {
+      const { startDate, endDate } = getDateRange()
+      const tasks = await window.electronAPI.listTasksWithHistory({ startDate, endDate })
+
+      if (tasks.length === 0) {
+        setError('该时间范围内没有任务数据')
+        return
+      }
+
+      const children: (Paragraph | Table)[] = []
+
+      children.push(new Paragraph({
+        text: '任务数据导出',
+        heading: HeadingLevel.TITLE,
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 400 },
+      }))
+
+      children.push(new Paragraph({
+        children: [
+          new TextRun({ text: '时间范围：', bold: true }),
+          new TextRun({ text: `${startDate} 至 ${endDate}` }),
+        ],
+        spacing: { after: 400 },
+      }))
+
+      children.push(new Paragraph({
+        text: '',
+        spacing: { after: 200 },
+      }))
+
+      tasks.forEach((task, index) => {
+        children.push(new Paragraph({
+          text: `${index + 1}. ${task.title}`,
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 300, after: 200 },
+        }))
+
+        children.push(new Paragraph({
+          children: [
+            new TextRun({ text: '创建时间：', bold: true }),
+            new TextRun({ text: task.created_at.split('T')[0] }),
+          ],
+          spacing: { after: 80 },
+        }))
+
+        children.push(new Paragraph({
+          children: [
+            new TextRun({ text: '优先级：', bold: true }),
+            new TextRun({ text: priorityLabelMap[task.priority] || task.priority }),
+          ],
+          spacing: { after: 80 },
+        }))
+
+        children.push(new Paragraph({
+          children: [
+            new TextRun({ text: '状态：', bold: true }),
+            new TextRun({ text: statusLabelMap[task.status] || task.status }),
+          ],
+          spacing: { after: 80 },
+        }))
+
+        children.push(new Paragraph({
+          children: [
+            new TextRun({ text: '截止日期：', bold: true }),
+            new TextRun({ text: task.due_date || '无' }),
+          ],
+          spacing: { after: 200 },
+        }))
+
+        if (task.description) {
+          children.push(new Paragraph({
+            children: [
+              new TextRun({ text: '描述：', bold: true }),
+            ],
+            spacing: { after: 80 },
+          }))
+          children.push(new Paragraph({
+            text: stripImageMarks(task.description),
+            spacing: { after: 200 },
+          }))
+        }
+
+        if (task.history && task.history.length > 0) {
+          children.push(new Paragraph({
+            children: [
+              new TextRun({ text: '变更历史：', bold: true }),
+            ],
+            spacing: { after: 80 },
+          }))
+          task.history.forEach(h => {
+            children.push(new Paragraph({
+              text: formatHistoryEntry(h),
+              bullet: { level: 0 },
+            }))
+          })
+        }
+
+        children.push(new Paragraph({
+          text: '',
+          spacing: { before: 200, after: 200 },
+          border: {
+            bottom: { style: 'single', size: 1, color: 'CCCCCC' },
+          },
+        }))
+      })
+
+      children.push(new Paragraph({
+        text: `导出时间: ${new Date().toLocaleString('zh-CN')}`,
+        spacing: { before: 400 },
+        alignment: AlignmentType.RIGHT,
+      }))
+
+      const doc = new Document({
+        sections: [{ children }],
+      })
+
+      const blob = await Packer.toBlob(doc)
+      const arrayBuffer = await blob.arrayBuffer()
+
+      const result = await window.electronAPI.saveBinaryFile({
+        defaultPath: `任务数据_${startDate}_${endDate}.docx`,
+        filters: [{ name: 'Word Document', extensions: ['docx'] }],
+        content: Array.from(new Uint8Array(arrayBuffer)),
+      })
+
+      if (result.success) {
+        alert(`文件已保存到: ${result.filePath}`)
+      } else if (!result.cancelled) {
+        setError(result.error || '保存文件失败')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '导出失败')
+    } finally {
+      setExportingTaskData(false)
     }
   }
 
@@ -913,6 +1211,47 @@ const Summary: React.FC = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
                 导出 Word
+              </button>
+
+              <div className="w-px h-6 bg-gray-300 mx-1"></div>
+
+              <button
+                onClick={handleExportTaskDataMarkdown}
+                disabled={!stats || stats.total === 0 || exportingTaskData}
+                className="flex items-center gap-2 px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {exportingTaskData ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-700"></div>
+                    导出中...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    导出任务 MD
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleExportTaskDataWord}
+                disabled={!stats || stats.total === 0 || exportingTaskData}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {exportingTaskData ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-emerald-700"></div>
+                    导出中...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    导出任务 Word
+                  </>
+                )}
               </button>
             </div>
           )}

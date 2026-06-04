@@ -618,6 +618,32 @@ ipcMain.handle('task:list', (_event, filters?: { date?: string; status?: string;
   return stmt?.all(...params) || []
 })
 
+ipcMain.handle('task:listWithHistory', (_event, filters?: { startDate?: string; endDate?: string }) => {
+  let sql = 'SELECT * FROM tasks WHERE 1=1'
+  const params: string[] = []
+
+  if (filters?.startDate) {
+    sql += " AND date(created_at, 'localtime') >= ?"
+    params.push(filters.startDate)
+  }
+
+  if (filters?.endDate) {
+    sql += " AND date(created_at, 'localtime') <= ?"
+    params.push(filters.endDate)
+  }
+
+  sql += ' ORDER BY created_at DESC'
+
+  const stmt = db?.prepare(sql)
+  const tasks = stmt?.all(...params) || []
+
+  const historyStmt = db?.prepare('SELECT * FROM task_history WHERE task_id = ? ORDER BY timestamp DESC')
+  return tasks.map((task: any) => ({
+    ...task,
+    history: historyStmt?.all(task.id) || []
+  }))
+})
+
 ipcMain.handle('task:getCounts', (_event, filters?: { date?: string; startDate?: string; endDate?: string }) => {
   let sql = 'SELECT status, COUNT(*) as count FROM tasks'
   const conditions: string[] = []
