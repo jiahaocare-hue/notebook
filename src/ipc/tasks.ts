@@ -11,7 +11,8 @@ declare global {
       getTask: (taskId: number) => Promise<Task | undefined>
       listTasks: (filters?: TaskFilters) => Promise<Task[]>
       listTasksWithHistory: (filters?: { startDate?: string; endDate?: string }) => Promise<TaskWithHistory[]>
-      getCounts: (filters?: { date?: string; startDate?: string; endDate?: string }) => Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }>
+      getCounts: (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }>
+      getEarliestTaskDate: () => Promise<string>
       getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }) => Promise<TaskHistory[]>
       searchKeyword: (query: string, options?: SearchOptions) => Promise<Task[]>
       searchSemantic: (query: string, options?: SearchOptions) => Promise<{ error?: string; tasks: Task[] }>
@@ -105,10 +106,15 @@ export const taskApi = {
     if (!api) throw new Error('electronAPI not available')
     return api.listTasksWithHistory(filters)
   },
-  getCounts: async (filters?: { date?: string; startDate?: string; endDate?: string }): Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }> => {
+  getCounts: async (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }): Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }> => {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.getCounts(filters)
+  },
+  getEarliestDate: async (): Promise<string> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getEarliestTaskDate()
   },
   getHistory: async (id: number, options?: { limit?: number; offset?: number }): Promise<TaskHistory[]> => {
     const api = getElectronAPI()

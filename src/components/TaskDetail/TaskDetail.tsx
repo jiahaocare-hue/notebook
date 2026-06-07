@@ -304,7 +304,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
       handleAddContent()
     }
@@ -618,7 +618,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                 >
                   <div className="w-2 h-2 mt-1.5 rounded-full bg-blue-400 flex-shrink-0" />
                   <div className="flex-1">
-                    <p className="text-gray-700">{changeText}</p>
+                    <p className="text-gray-700 whitespace-pre-line">{changeText}</p>
                     {addedImages.length > 0 && (
                       <HistoryImages addedImages={addedImages} onImageClick={setPreviewImage} taskId={task.id} />
                     )}

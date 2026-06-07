@@ -45,11 +45,14 @@ export type StatusFilter = 'all' | 'pending' | 'in_progress' | 'completed' | 'ca
 
 export type DateFilter = 'today' | 'week' | 'history'
 
+export type DateFilterMode = 'created' | 'updated' | 'created_or_updated'
+
 export interface TaskFilters {
   date?: string
   status?: string
   startDate?: string
   endDate?: string
+  dateFilterMode?: DateFilterMode
 }
 
 export interface SearchOptions {

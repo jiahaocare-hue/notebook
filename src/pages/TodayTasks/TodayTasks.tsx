@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Task, NewTask, UpdateTask, StatusFilter, DateFilter } from '../../types'
+import { Task, NewTask, UpdateTask, StatusFilter, DateFilter, DateFilterMode } from '../../types'
 import { useTaskContext } from '../../context/TaskContext'
 import TaskCard from '../../components/TaskCard'
 import TaskForm from '../../components/TaskForm'
@@ -8,6 +8,7 @@ import Modal from '../../components/Modal'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { TaskListSkeleton } from '../../components/Skeleton'
 import { DateRangePicker } from '../../components/DatePicker'
+import { taskApi } from '../../ipc/tasks'
 
 type SortType = 'created_at' | 'due_date' | 'priority'
 type SortOrder = 'asc' | 'desc'
@@ -30,7 +31,6 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
   
   const [historyStartDate, setHistoryStartDate] = useState<string>(() => {
     const date = new Date()
-    date.setMonth(date.getMonth() - 1)
     const year = date.getFullYear()
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
@@ -44,8 +44,20 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
     return `${year}-${month}-${day}`
   })
   
+  // 当切换到"历史"筛选时，获取最早任务日期作为默认开始日期
+  useEffect(() => {
+    if (dateFilter === 'history') {
+      taskApi.getEarliestDate().then(date => {
+        setHistoryStartDate(date)
+      }).catch(() => {
+        // 获取失败时保持当前默认值
+      })
+    }
+  }, [dateFilter])
+  
   const [sortType, setSortType] = useState<SortType>('created_at')
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
+  const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('created')
 
   const formatDateLocal = (date: Date): string => {
     const year = date.getFullYear()
@@ -87,9 +99,11 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
     if (statusFilter !== 'all') {
       filters.status = statusFilter
     }
-    
+
+    filters.dateFilterMode = dateFilterMode
+
     return filters
-  }, [dateFilter, statusFilter, historyStartDate, historyEndDate])
+  }, [dateFilter, statusFilter, historyStartDate, historyEndDate, dateFilterMode])
 
   // 首次加载和筛选条件变化时，刷新任务列表和计数
   useEffect(() => {
@@ -97,10 +111,11 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
     refreshTasks(filters)
     
     // 只传递日期筛选条件给 refreshCounts，不包含 status
-    const dateFilters: { date?: string; startDate?: string; endDate?: string } = {}
+    const dateFilters: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string } = {}
     if (filters.date) dateFilters.date = filters.date
     if (filters.startDate) dateFilters.startDate = filters.startDate
     if (filters.endDate) dateFilters.endDate = filters.endDate
+    if (filters.dateFilterMode) dateFilters.dateFilterMode = filters.dateFilterMode
     refreshCounts(dateFilters)
   }, [getFilters, refreshTasks, refreshCounts])
 
@@ -168,10 +183,11 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       const filters = getFilters()
       await refreshTasks(filters)
       
-      const dateFilters: { date?: string; startDate?: string; endDate?: string } = {}
+      const dateFilters: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string } = {}
       if (filters.date) dateFilters.date = filters.date
       if (filters.startDate) dateFilters.startDate = filters.startDate
       if (filters.endDate) dateFilters.endDate = filters.endDate
+      if (filters.dateFilterMode) dateFilters.dateFilterMode = filters.dateFilterMode
       await refreshCounts(dateFilters)
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除任务失败')
@@ -195,10 +211,11 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       await refreshTasks(filters)
       
       // 只传递日期筛选条件给 refreshCounts
-      const dateFilters: { date?: string; startDate?: string; endDate?: string } = {}
+      const dateFilters: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string } = {}
       if (filters.date) dateFilters.date = filters.date
       if (filters.startDate) dateFilters.startDate = filters.startDate
       if (filters.endDate) dateFilters.endDate = filters.endDate
+      if (filters.dateFilterMode) dateFilters.dateFilterMode = filters.dateFilterMode
       await refreshCounts(dateFilters)
     } catch (err) {
       setError(err instanceof Error ? err.message : '更新任务失败')
@@ -244,10 +261,11 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       await refreshTasks(filters)
       
       // 只传递日期筛选条件给 refreshCounts
-      const dateFilters: { date?: string; startDate?: string; endDate?: string } = {}
+      const dateFilters: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string } = {}
       if (filters.date) dateFilters.date = filters.date
       if (filters.startDate) dateFilters.startDate = filters.startDate
       if (filters.endDate) dateFilters.endDate = filters.endDate
+      if (filters.dateFilterMode) dateFilters.dateFilterMode = filters.dateFilterMode
       await refreshCounts(dateFilters)
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存任务失败')
@@ -331,6 +349,28 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
             >
               查询
             </button>
+          </div>
+          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
+            <span className="text-sm font-medium text-gray-600">筛选方式</span>
+            <div className="flex items-center gap-1">
+              {([
+                { value: 'created' as DateFilterMode, label: '创建时间' },
+                { value: 'updated' as DateFilterMode, label: '更新时间' },
+                { value: 'created_or_updated' as DateFilterMode, label: '创建或更新' },
+              ]).map(({ value, label }) => (
+                <button
+                  key={value}
+                  onClick={() => setDateFilterMode(value)}
+                  className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                    dateFilterMode === value
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

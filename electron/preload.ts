@@ -41,6 +41,7 @@ export interface TaskFilters {
   status?: string
   startDate?: string
   endDate?: string
+  dateFilterMode?: string
 }
 
 export interface SearchOptions {
@@ -128,7 +129,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getTask: (taskId: number): Promise<Task | undefined> => ipcRenderer.invoke('task:get', taskId),
   listTasks: (filters?: TaskFilters): Promise<Task[]> => ipcRenderer.invoke('task:list', filters),
   listTasksWithHistory: (filters?: { startDate?: string; endDate?: string }): Promise<(Task & { history: TaskHistory[] })[]> => ipcRenderer.invoke('task:listWithHistory', filters),
-  getCounts: (filters?: { date?: string; startDate?: string; endDate?: string }): Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }> => ipcRenderer.invoke('task:getCounts', filters),
+  getCounts: (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }): Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }> => ipcRenderer.invoke('task:getCounts', filters),
+  getEarliestTaskDate: (): Promise<string> => ipcRenderer.invoke('task:earliest-date'),
 
   getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }): Promise<TaskHistory[]> => ipcRenderer.invoke('history:getByTaskId', taskId, options),
 

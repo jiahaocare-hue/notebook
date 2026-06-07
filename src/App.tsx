@@ -7,6 +7,7 @@ import { Summary } from './pages/Summary'
 import { SettingsModal } from './components/Settings'
 import { TaskProvider, useTaskContext } from './context/TaskContext'
 import { StatusFilter, DateFilter } from './types'
+import { taskApi } from './ipc/tasks'
 
 type PageType = 'tasks' | 'search' | 'calendar' | 'summary'
 
@@ -51,9 +52,18 @@ function AppContent() {
         endDate: endOfWeek.toISOString().split('T')[0] 
       })
     } else {
-      refreshCounts({ 
-        startDate: '2020-01-01', 
-        endDate: '2030-12-31' 
+      taskApi.getEarliestDate().then(earliestDate => {
+        const today = new Date()
+        const todayStr = today.toISOString().split('T')[0]
+        refreshCounts({
+          startDate: earliestDate,
+          endDate: todayStr
+        })
+      }).catch(() => {
+        refreshCounts({
+          startDate: '2020-01-01',
+          endDate: '2030-12-31'
+        })
       })
     }
     

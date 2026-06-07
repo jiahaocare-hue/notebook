@@ -588,13 +588,21 @@ ipcMain.handle('task:get', (_event, taskId: number) => {
   return stmt?.get(taskId)
 })
 
-ipcMain.handle('task:list', (_event, filters?: { date?: string; status?: string; startDate?: string; endDate?: string }) => {
+ipcMain.handle('task:list', (_event, filters?: { date?: string; status?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => {
   let sql = 'SELECT * FROM tasks WHERE 1=1'
   const params: string[] = []
+  const dateField = filters?.dateFilterMode === 'updated' ? 'updated_at'
+    : filters?.dateFilterMode === 'created_or_updated' ? null
+    : 'created_at'
 
   if (filters?.date) {
-    sql += " AND date(created_at, 'localtime') = ?"
-    params.push(filters.date)
+    if (dateField) {
+      sql += ` AND date(${dateField}, 'localtime') = ?`
+      params.push(filters.date)
+    } else {
+      sql += ` AND (date(created_at, 'localtime') = ? OR date(updated_at, 'localtime') = ?)`
+      params.push(filters.date, filters.date)
+    }
   }
 
   if (filters?.status) {
@@ -602,14 +610,30 @@ ipcMain.handle('task:list', (_event, filters?: { date?: string; status?: string;
     params.push(filters.status)
   }
 
-  if (filters?.startDate) {
-    sql += " AND date(created_at, 'localtime') >= ?"
-    params.push(filters.startDate)
-  }
-
-  if (filters?.endDate) {
-    sql += " AND date(created_at, 'localtime') <= ?"
-    params.push(filters.endDate)
+  if (filters?.startDate && filters?.endDate) {
+    if (dateField) {
+      sql += ` AND date(${dateField}, 'localtime') >= ? AND date(${dateField}, 'localtime') <= ?`
+      params.push(filters.startDate, filters.endDate)
+    } else {
+      sql += ` AND ((date(created_at, 'localtime') >= ? AND date(created_at, 'localtime') <= ?) OR (date(updated_at, 'localtime') >= ? AND date(updated_at, 'localtime') <= ?))`
+      params.push(filters.startDate, filters.endDate, filters.startDate, filters.endDate)
+    }
+  } else if (filters?.startDate) {
+    if (dateField) {
+      sql += ` AND date(${dateField}, 'localtime') >= ?`
+      params.push(filters.startDate)
+    } else {
+      sql += ` AND (date(created_at, 'localtime') >= ? OR date(updated_at, 'localtime') >= ?)`
+      params.push(filters.startDate, filters.startDate)
+    }
+  } else if (filters?.endDate) {
+    if (dateField) {
+      sql += ` AND date(${dateField}, 'localtime') <= ?`
+      params.push(filters.endDate)
+    } else {
+      sql += ` AND (date(created_at, 'localtime') <= ? OR date(updated_at, 'localtime') <= ?)`
+      params.push(filters.endDate, filters.endDate)
+    }
   }
 
   sql += ' ORDER BY created_at DESC'
@@ -644,24 +668,48 @@ ipcMain.handle('task:listWithHistory', (_event, filters?: { startDate?: string; 
   }))
 })
 
-ipcMain.handle('task:getCounts', (_event, filters?: { date?: string; startDate?: string; endDate?: string }) => {
+ipcMain.handle('task:getCounts', (_event, filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => {
   let sql = 'SELECT status, COUNT(*) as count FROM tasks'
   const conditions: string[] = []
   const params: string[] = []
+  const dateField = filters?.dateFilterMode === 'updated' ? 'updated_at'
+    : filters?.dateFilterMode === 'created_or_updated' ? null
+    : 'created_at'
 
   if (filters?.date) {
-    conditions.push("date(created_at, 'localtime') = ?")
-    params.push(filters.date)
+    if (dateField) {
+      conditions.push(`date(${dateField}, 'localtime') = ?`)
+      params.push(filters.date)
+    } else {
+      conditions.push(`(date(created_at, 'localtime') = ? OR date(updated_at, 'localtime') = ?)`)
+      params.push(filters.date, filters.date)
+    }
   }
 
-  if (filters?.startDate) {
-    conditions.push("date(created_at, 'localtime') >= ?")
-    params.push(filters.startDate)
-  }
-
-  if (filters?.endDate) {
-    conditions.push("date(created_at, 'localtime') <= ?")
-    params.push(filters.endDate)
+  if (filters?.startDate && filters?.endDate) {
+    if (dateField) {
+      conditions.push(`date(${dateField}, 'localtime') >= ? AND date(${dateField}, 'localtime') <= ?`)
+      params.push(filters.startDate, filters.endDate)
+    } else {
+      conditions.push(`((date(created_at, 'localtime') >= ? AND date(created_at, 'localtime') <= ?) OR (date(updated_at, 'localtime') >= ? AND date(updated_at, 'localtime') <= ?))`)
+      params.push(filters.startDate, filters.endDate, filters.startDate, filters.endDate)
+    }
+  } else if (filters?.startDate) {
+    if (dateField) {
+      conditions.push(`date(${dateField}, 'localtime') >= ?`)
+      params.push(filters.startDate)
+    } else {
+      conditions.push(`(date(created_at, 'localtime') >= ? OR date(updated_at, 'localtime') >= ?)`)
+      params.push(filters.startDate, filters.startDate)
+    }
+  } else if (filters?.endDate) {
+    if (dateField) {
+      conditions.push(`date(${dateField}, 'localtime') <= ?`)
+      params.push(filters.endDate)
+    } else {
+      conditions.push(`(date(created_at, 'localtime') <= ? OR date(updated_at, 'localtime') <= ?)`)
+      params.push(filters.endDate, filters.endDate)
+    }
   }
 
   if (conditions.length > 0) {
@@ -690,6 +738,18 @@ ipcMain.handle('task:getCounts', (_event, filters?: { date?: string; startDate?:
   }
 
   return counts
+})
+
+ipcMain.handle('task:earliest-date', () => {
+  const result = db?.prepare("SELECT date(MIN(created_at), 'localtime') as earliest_date FROM tasks").get() as { earliest_date: string | null } | undefined
+  if (result?.earliest_date) {
+    return result.earliest_date
+  }
+  const today = new Date()
+  const year = today.getFullYear()
+  const month = String(today.getMonth() + 1).padStart(2, '0')
+  const day = String(today.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 })
 
 ipcMain.handle('history:getByTaskId', (_event, taskId: number, options?: { limit?: number; offset?: number }) => {

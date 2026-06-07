@@ -17,7 +17,7 @@ interface TaskContextType {
   taskCounts: TaskCounts
   totalTaskCounts: TaskCounts
   refreshTasks: (filters?: Record<string, string>) => Promise<void>
-  refreshCounts: (filters?: { date?: string; startDate?: string; endDate?: string }) => Promise<void>
+  refreshCounts: (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => Promise<void>
   createTask: (task: NewTask) => Promise<number>
   updateTask: (id: number, task: UpdateTask) => Promise<boolean>
   deleteTask: (id: number) => Promise<boolean>
@@ -61,7 +61,7 @@ export const TaskProvider: React.FC<TaskProviderProps> = ({ children }) => {
     }
   }, [])
 
-  const refreshCounts = useCallback(async (filters?: { date?: string; startDate?: string; endDate?: string }) => {
+  const refreshCounts = useCallback(async (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => {
     try {
       const counts = await taskApi.getCounts(filters)
       setTaskCounts(counts)

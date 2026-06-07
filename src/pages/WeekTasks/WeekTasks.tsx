@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Task, NewTask, UpdateTask, StatusFilter } from '../../types'
+import { Task, NewTask, UpdateTask, StatusFilter, DateFilterMode } from '../../types'
 import { taskApi } from '../../ipc/tasks'
 import TaskCard from '../../components/TaskCard'
 import TaskForm from '../../components/TaskForm'
@@ -46,6 +46,7 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [taskToDelete, setTaskToDelete] = useState<number | null>(null)
+  const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('created')
 
   const loadTasks = useCallback(async () => {
     try {
@@ -53,9 +54,10 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
       setError(null)
       
       const { monday, sunday } = getWeekRange()
-      const filters: { startDate: string; endDate: string; status?: string } = {
+      const filters: { startDate: string; endDate: string; status?: string; dateFilterMode?: DateFilterMode } = {
         startDate: formatDateStr(monday),
         endDate: formatDateStr(sunday),
+        dateFilterMode,
       }
       
       if (statusFilter !== 'all') {
@@ -69,6 +71,7 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
         const allTasks = await taskApi.list({
           startDate: formatDateStr(monday),
           endDate: formatDateStr(sunday),
+          dateFilterMode,
         })
         const counts = {
           all: allTasks.length,
@@ -84,7 +87,7 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
     } finally {
       setLoading(false)
     }
-  }, [statusFilter, onTaskCountsChange])
+  }, [statusFilter, onTaskCountsChange, dateFilterMode])
 
   useEffect(() => {
     loadTasks()
@@ -242,6 +245,25 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
           <p className="text-sm text-gray-500 mt-1">
             {getWeekDisplayText()}
           </p>
+          <div className="flex items-center gap-1 mt-2">
+            {([
+              { value: 'created' as DateFilterMode, label: '创建时间' },
+              { value: 'updated' as DateFilterMode, label: '更新时间' },
+              { value: 'created_or_updated' as DateFilterMode, label: '创建或更新' },
+            ]).map(({ value, label }) => (
+              <button
+                key={value}
+                onClick={() => setDateFilterMode(value)}
+                className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                  dateFilterMode === value
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <button
           onClick={handleCreateTask}
