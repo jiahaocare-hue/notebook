@@ -14,6 +14,8 @@ declare global {
       getCounts: (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }>
       getEarliestTaskDate: () => Promise<string>
       getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }) => Promise<TaskHistory[]>
+      deleteHistory: (historyId: number) => Promise<boolean>
+      updateHistory: (historyId: number, newValue: string) => Promise<boolean>
       searchKeyword: (query: string, options?: SearchOptions) => Promise<Task[]>
       searchSemantic: (query: string, options?: SearchOptions) => Promise<{ error?: string; tasks: Task[] }>
       searchHybrid: (query: string, options?: SearchOptions) => Promise<{ error?: string; tasks: Task[] }>
@@ -120,6 +122,16 @@ export const taskApi = {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.getTaskHistory(id, options)
+  },
+  deleteHistory: async (historyId: number): Promise<boolean> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.deleteHistory(historyId)
+  },
+  updateHistory: async (historyId: number, newValue: string): Promise<boolean> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.updateHistory(historyId, newValue)
   },
 }
 

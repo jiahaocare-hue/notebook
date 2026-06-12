@@ -3,6 +3,7 @@ import { Task, TaskHistory } from '../../types'
 import { imageApi, taskApi, clipboardApi, ocrApi } from '../../ipc/tasks'
 import { DatePicker } from '../DatePicker'
 import ImageViewer from '../ImageViewer'
+import { ConfirmDialog } from '../ConfirmDialog'
 
 interface OcrProgress {
   status: string
@@ -113,6 +114,9 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const HISTORY_PAGE_SIZE = 20
+  const [editingHistoryId, setEditingHistoryId] = useState<number | null>(null)
+  const [editingHistoryContent, setEditingHistoryContent] = useState('')
+  const [deleteHistoryId, setDeleteHistoryId] = useState<number | null>(null)
 
   useEffect(() => {
     if (window.electronAPI?.onOcrProgress) {
@@ -301,6 +305,68 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     await onUpdate(updatedTask)
     setNewContent('')
     loadHistory()
+  }
+
+  const handleDeleteHistory = async (historyId: number) => {
+    setDeleteHistoryId(historyId)
+  }
+
+  const confirmDeleteHistory = async () => {
+    if (deleteHistoryId === null) return
+    try {
+      await taskApi.deleteHistory(deleteHistoryId)
+      loadHistory()
+    } catch (err) {
+      console.error('Failed to delete history:', err)
+    } finally {
+      setDeleteHistoryId(null)
+    }
+  }
+
+  const handleStartEditHistory = (item: TaskHistory) => {
+    setEditingHistoryId(item.id)
+    // 从 JSON 中提取 description 文本，而非显示原始 JSON
+    try {
+      const parsed = item.new_value ? JSON.parse(item.new_value) : {}
+      if (parsed.description !== undefined) {
+        setEditingHistoryContent(parsed.description || '')
+      } else {
+        setEditingHistoryContent(item.new_value || '')
+      }
+    } catch {
+      setEditingHistoryContent(item.new_value || '')
+    }
+  }
+
+  const handleSaveEditHistory = async () => {
+    if (editingHistoryId === null) return
+    try {
+      // 找到当前编辑的历史记录，更新其 new_value 中的 description 字段
+      const currentItem = history.find(h => h.id === editingHistoryId)
+      let newValue = editingHistoryContent
+      if (currentItem?.new_value) {
+        try {
+          const parsed = JSON.parse(currentItem.new_value)
+          if (parsed.description !== undefined) {
+            parsed.description = editingHistoryContent
+            newValue = JSON.stringify(parsed)
+          }
+        } catch {
+          // new_value 不是 JSON，直接使用编辑内容
+        }
+      }
+      await taskApi.updateHistory(editingHistoryId, newValue)
+      setEditingHistoryId(null)
+      setEditingHistoryContent('')
+      loadHistory()
+    } catch (err) {
+      console.error('Failed to update history:', err)
+    }
+  }
+
+  const handleCancelEditHistory = () => {
+    setEditingHistoryId(null)
+    setEditingHistoryContent('')
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -614,15 +680,60 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
               return (
                 <div
                   key={item.id}
-                  className="flex items-start gap-3 text-sm py-2 border-b border-gray-100 last:border-0"
+                  className="flex items-start gap-3 text-sm py-2 border-b border-gray-100 last:border-0 group"
                 >
                   <div className="w-2 h-2 mt-1.5 rounded-full bg-blue-400 flex-shrink-0" />
                   <div className="flex-1">
-                    <p className="text-gray-700 whitespace-pre-line">{changeText}</p>
-                    {addedImages.length > 0 && (
-                      <HistoryImages addedImages={addedImages} onImageClick={setPreviewImage} taskId={task.id} />
+                    {editingHistoryId === item.id ? (
+                      <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
+                        <textarea
+                          value={editingHistoryContent}
+                          onChange={(e) => setEditingHistoryContent(e.target.value)}
+                          rows={3}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleSaveEditHistory() }}
+                            className="px-3 py-1 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-xs"
+                          >
+                            保存
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleCancelEditHistory() }}
+                            className="px-3 py-1 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 text-xs"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-gray-700 whitespace-pre-line">{changeText}</p>
+                        {addedImages.length > 0 && (
+                          <HistoryImages addedImages={addedImages} onImageClick={setPreviewImage} taskId={task.id} />
+                        )}
+                      </>
                     )}
-                    <p className="text-gray-400 text-xs mt-0.5">{formatDate(item.timestamp)}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-gray-400 text-xs">{formatDate(item.timestamp)}</p>
+                      {editingHistoryId !== item.id && (
+                        <div className="hidden group-hover:flex items-center gap-1">
+                          <button
+                            onClick={() => handleStartEditHistory(item)}
+                            className="text-gray-400 hover:text-blue-500 text-xs"
+                          >
+                            编辑
+                          </button>
+                          <button
+                            onClick={() => handleDeleteHistory(item.id)}
+                            className="text-gray-400 hover:text-red-500 text-xs"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )
@@ -661,6 +772,17 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
           copyStatus={copyStatus}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={deleteHistoryId !== null}
+        title="删除历史记录"
+        message="确定要删除这条历史记录吗？此操作无法撤销。"
+        confirmText="删除"
+        cancelText="取消"
+        onConfirm={confirmDeleteHistory}
+        onCancel={() => setDeleteHistoryId(null)}
+        variant="danger"
+      />
     </div>
   )
 }

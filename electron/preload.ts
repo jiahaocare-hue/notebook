@@ -133,6 +133,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getEarliestTaskDate: (): Promise<string> => ipcRenderer.invoke('task:earliest-date'),
 
   getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }): Promise<TaskHistory[]> => ipcRenderer.invoke('history:getByTaskId', taskId, options),
+  deleteHistory: (historyId: number): Promise<boolean> => ipcRenderer.invoke('history:delete', historyId),
+  updateHistory: (historyId: number, newValue: string): Promise<boolean> => ipcRenderer.invoke('history:update', historyId, newValue),
 
   searchKeyword: (query: string, options?: SearchOptions): Promise<Task[]> => ipcRenderer.invoke('search:keyword', query, options),
   searchSemantic: (query: string, options?: SearchOptions): Promise<SearchResult<SemanticSearchResult>> => ipcRenderer.invoke('search:semantic', query, options),

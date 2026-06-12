@@ -759,6 +759,26 @@ ipcMain.handle('history:getByTaskId', (_event, taskId: number, options?: { limit
   return stmt?.all(taskId, limit, offset) || []
 })
 
+ipcMain.handle('history:delete', (_event, historyId: number) => {
+  try {
+    db?.prepare('DELETE FROM task_history WHERE id = ?').run(historyId)
+    return true
+  } catch (error) {
+    logger.error('Failed to delete history record:', error)
+    return false
+  }
+})
+
+ipcMain.handle('history:update', (_event, historyId: number, newValue: string) => {
+  try {
+    db?.prepare('UPDATE task_history SET new_value = ? WHERE id = ?').run(newValue, historyId)
+    return true
+  } catch (error) {
+    logger.error('Failed to update history record:', error)
+    return false
+  }
+})
+
 ipcMain.handle('search:keyword', (_event, query: string, options?: { fields?: string[]; limit?: number; startDate?: string; endDate?: string }) => {
   const limit = options?.limit || 50
   
