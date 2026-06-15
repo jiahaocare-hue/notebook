@@ -7,6 +7,8 @@ export interface Task {
   status: string
   priority: string
   due_date: string | null
+  parent_id: number | null
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -17,6 +19,7 @@ export interface NewTask {
   status?: string
   priority?: string
   due_date?: string
+  parent_id?: number
 }
 
 export interface UpdateTask {
@@ -25,6 +28,8 @@ export interface UpdateTask {
   status?: string
   priority?: string
   due_date?: string
+  parent_id?: number | null
+  sort_order?: number
 }
 
 export interface TaskHistory {
@@ -128,9 +133,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteTask: (taskId: number): Promise<boolean> => ipcRenderer.invoke('task:delete', taskId),
   getTask: (taskId: number): Promise<Task | undefined> => ipcRenderer.invoke('task:get', taskId),
   listTasks: (filters?: TaskFilters): Promise<Task[]> => ipcRenderer.invoke('task:list', filters),
-  listTasksWithHistory: (filters?: { startDate?: string; endDate?: string }): Promise<(Task & { history: TaskHistory[] })[]> => ipcRenderer.invoke('task:listWithHistory', filters),
+  listTasksWithHistory: (filters?: { startDate?: string; endDate?: string; dateFilterMode?: string }): Promise<(Task & { history: TaskHistory[] })[]> => ipcRenderer.invoke('task:listWithHistory', filters),
   getCounts: (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }): Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }> => ipcRenderer.invoke('task:getCounts', filters),
   getEarliestTaskDate: (): Promise<string> => ipcRenderer.invoke('task:earliest-date'),
+  listSubtasks: (parentId: number): Promise<Task[]> => ipcRenderer.invoke('task:listSubtasks', parentId),
+  getSubtaskCounts: (taskId: number): Promise<{ total: number; completed: number }> => ipcRenderer.invoke('task:getSubtaskCounts', taskId),
+  getActivityTimeline: (taskId: number, options?: { limit?: number; offset?: number }): Promise<{ id: number; task_id: number; action: string; old_value: string | null; new_value: string | null; timestamp: string; source_task_id: number; source_task_title: string; source_parent_id: number | null }[]> => ipcRenderer.invoke('task:getActivityTimeline', taskId, options),
 
   getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }): Promise<TaskHistory[]> => ipcRenderer.invoke('history:getByTaskId', taskId, options),
   deleteHistory: (historyId: number): Promise<boolean> => ipcRenderer.invoke('history:delete', historyId),

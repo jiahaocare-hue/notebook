@@ -8,6 +8,8 @@ export interface Task {
   status: TaskStatus
   priority: TaskPriority
   due_date: string | null
+  parent_id: number | null
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -18,6 +20,8 @@ export interface NewTask {
   status?: TaskStatus
   priority?: TaskPriority
   due_date?: string
+  parent_id?: number
+  sort_order?: number
 }
 
 export interface UpdateTask {
@@ -26,6 +30,8 @@ export interface UpdateTask {
   status?: TaskStatus
   priority?: TaskPriority
   due_date?: string
+  parent_id?: number | null
+  sort_order?: number
 }
 
 export interface TaskHistory {
@@ -114,4 +120,21 @@ export interface SummaryRequest {
   summaryType?: 'weekly' | 'yearly'
   pendingTasks?: CompletedTask[]
   inProgressTasks?: CompletedTask[]
+}
+
+export interface ActivityTimelineItem {
+  id: number
+  task_id: number
+  action: string
+  old_value: string | null
+  new_value: string | null
+  timestamp: string
+  source_task_id: number
+  source_task_title: string
+  source_parent_id: number | null
+}
+
+export interface SubtaskCounts {
+  total: number
+  completed: number
 }

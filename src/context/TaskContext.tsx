@@ -118,6 +118,8 @@ export const TaskProvider: React.FC<TaskProviderProps> = ({ children }) => {
       status: task.status || 'in_progress',
       priority: task.priority || 'medium',
       due_date: task.due_date || null,
+      parent_id: task.parent_id ?? null,
+      sort_order: 0,
       created_at: now,
       updated_at: now,
     }

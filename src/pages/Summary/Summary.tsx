@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { TaskStats, CompletedTask, SummaryRequest, TaskPriority, TaskStatus } from '../../types'
+import { TaskStats, CompletedTask, SummaryRequest, TaskPriority, TaskStatus, DateFilterMode } from '../../types'
 import { llmApi } from '../../ipc/tasks'
 import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, HeadingLevel } from 'docx'
 
@@ -134,6 +134,7 @@ const Summary: React.FC = () => {
   const [timeRangeType, setTimeRangeType] = useState<TimeRangeType>('week')
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear())
   const [weekOffset, setWeekOffset] = useState(-1)
+  const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('created')
   const [customDateRange, setCustomDateRange] = useState<DateRange>(() => {
     const today = new Date()
     const year = today.getFullYear()
@@ -182,9 +183,9 @@ const Summary: React.FC = () => {
     try {
       const { startDate, endDate } = getDateRange()
       
-      const counts = await window.electronAPI.getCounts({ startDate, endDate })
+      const counts = await window.electronAPI.getCounts({ startDate, endDate, dateFilterMode })
       
-      const tasks = await window.electronAPI.listTasks({ startDate, endDate })
+      const tasks = await window.electronAPI.listTasks({ startDate, endDate, dateFilterMode })
       
       const processTask = async (task: { id: number; title: string; description: string | null; priority: string; status: string; due_date?: string | null; created_at?: string; updated_at?: string }) => {
         let history = undefined
@@ -238,6 +239,15 @@ const Summary: React.FC = () => {
       
       let monthlyDistribution: { month: string; count: number }[] = []
       
+      const getDateField = (task: { created_at?: string; updated_at?: string }): string | null => {
+        if (dateFilterMode === 'updated') {
+          return task.updated_at ? task.updated_at.split('T')[0] : null
+        } else if (dateFilterMode === 'created_or_updated') {
+          return task.updated_at ? task.updated_at.split('T')[0] : (task.created_at ? task.created_at.split('T')[0] : null)
+        }
+        return task.created_at ? task.created_at.split('T')[0] : null
+      }
+      
       if (timeRangeType === 'year') {
         for (let month = 1; month <= 12; month++) {
           const monthStr = String(month).padStart(2, '0')
@@ -246,8 +256,8 @@ const Summary: React.FC = () => {
           const monthEndStr = formatDateLocal(monthEnd)
           
           const monthTasks = tasks.filter(task => {
-            if (!task.created_at) return false
-            const taskDate = task.created_at.split('T')[0]
+            const taskDate = getDateField(task)
+            if (!taskDate) return false
             return taskDate >= monthStart && taskDate <= monthEndStr
           })
           
@@ -268,8 +278,8 @@ const Summary: React.FC = () => {
           const dateStr = formatDateLocal(date)
           
           const dayTasks = tasks.filter(task => {
-            if (!task.created_at) return false
-            const taskDate = task.created_at.split('T')[0]
+            const taskDate = getDateField(task)
+            if (!taskDate) return false
             return taskDate === dateStr
           })
           
@@ -312,7 +322,7 @@ const Summary: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [getDateRange, selectedYear, timeRangeType])
+  }, [getDateRange, selectedYear, timeRangeType, dateFilterMode])
 
   useEffect(() => {
     loadStatistics()
@@ -845,7 +855,7 @@ const Summary: React.FC = () => {
 
     try {
       const { startDate, endDate } = getDateRange()
-      const tasks = await window.electronAPI.listTasksWithHistory({ startDate, endDate })
+      const tasks = await window.electronAPI.listTasksWithHistory({ startDate, endDate, dateFilterMode })
 
       if (tasks.length === 0) {
         setError('该时间范围内没有任务数据')
@@ -854,6 +864,8 @@ const Summary: React.FC = () => {
 
       let content = `# 任务数据导出\n\n`
       content += `**时间范围**：${startDate} 至 ${endDate}\n\n`
+      const filterModeLabel = dateFilterMode === 'updated' ? '更新时间' : dateFilterMode === 'created_or_updated' ? '创建或更新时间' : '创建时间'
+      content += `**筛选模式**：${filterModeLabel}\n\n`
       content += `---\n\n`
 
       tasks.forEach((task, index) => {
@@ -904,7 +916,7 @@ const Summary: React.FC = () => {
 
     try {
       const { startDate, endDate } = getDateRange()
-      const tasks = await window.electronAPI.listTasksWithHistory({ startDate, endDate })
+      const tasks = await window.electronAPI.listTasksWithHistory({ startDate, endDate, dateFilterMode })
 
       if (tasks.length === 0) {
         setError('该时间范围内没有任务数据')
@@ -924,6 +936,15 @@ const Summary: React.FC = () => {
         children: [
           new TextRun({ text: '时间范围：', bold: true }),
           new TextRun({ text: `${startDate} 至 ${endDate}` }),
+        ],
+        spacing: { after: 200 },
+      }))
+
+      const filterModeLabel = dateFilterMode === 'updated' ? '更新时间' : dateFilterMode === 'created_or_updated' ? '创建或更新时间' : '创建时间'
+      children.push(new Paragraph({
+        children: [
+          new TextRun({ text: '筛选模式：', bold: true }),
+          new TextRun({ text: filterModeLabel }),
         ],
         spacing: { after: 400 },
       }))
@@ -1047,32 +1068,32 @@ const Summary: React.FC = () => {
     lines.forEach((line, index) => {
       if (line.startsWith('### ')) {
         elements.push(
-          <h3 key={index} className="text-lg font-semibold text-gray-800 mt-4 mb-2">
+          <h3 key={index} className="text-lg font-semibold text-gray-800 dark:text-gray-100 mt-4 mb-2">
             {line.substring(4)}
           </h3>
         )
       } else if (line.startsWith('## ')) {
         elements.push(
-          <h2 key={index} className="text-xl font-bold text-gray-900 mt-6 mb-3">
+          <h2 key={index} className="text-xl font-bold text-gray-900 dark:text-gray-100 mt-6 mb-3">
             {line.substring(3)}
           </h2>
         )
       } else if (line.startsWith('# ')) {
         elements.push(
-          <h1 key={index} className="text-2xl font-bold text-gray-900 mt-6 mb-4">
+          <h1 key={index} className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-6 mb-4">
             {line.substring(2)}
           </h1>
         )
       } else if (line.startsWith('- ') || line.startsWith('* ')) {
         elements.push(
-          <li key={index} className="ml-4 text-gray-700 mb-1">
+          <li key={index} className="ml-4 text-gray-700 dark:text-gray-300 mb-1">
             {line.substring(2)}
           </li>
         )
       } else if (line.match(/^\d+\.\s/)) {
         const content = line.replace(/^\d+\.\s/, '')
         elements.push(
-          <li key={index} className="ml-4 text-gray-700 mb-1 list-decimal">
+          <li key={index} className="ml-4 text-gray-700 dark:text-gray-300 mb-1 list-decimal">
             {content}
           </li>
         )
@@ -1080,7 +1101,7 @@ const Summary: React.FC = () => {
         elements.push(<br key={index} />)
       } else {
         elements.push(
-          <p key={index} className="text-gray-700 mb-2">
+          <p key={index} className="text-gray-700 dark:text-gray-300 mb-2">
             {line}
           </p>
         )
@@ -1100,19 +1121,19 @@ const Summary: React.FC = () => {
   }, [])
 
   const getStatusBadge = (rate: number): { color: string; text: string } => {
-    if (rate >= 70) return { color: 'bg-emerald-100 text-emerald-700', text: '✅ 达标' }
-    if (rate >= 40) return { color: 'bg-amber-100 text-amber-700', text: '⚠️ 偏低' }
-    return { color: 'bg-red-100 text-red-700', text: '❌ 极低' }
+    if (rate >= 70) return { color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400', text: '✅ 达标' }
+    if (rate >= 40) return { color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400', text: '⚠️ 偏低' }
+    return { color: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400', text: '❌ 极低' }
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
             {timeRangeType === 'week' ? '上周总结' : timeRangeType === 'year' ? '年度总结' : '自定义总结'}
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             {timeRangeType === 'week' 
               ? '查看上周任务统计，为周例会做准备' 
               : '查看任务统计和生成智能总结'}
@@ -1120,18 +1141,17 @@ const Summary: React.FC = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4">
         <div className="flex flex-wrap items-center gap-4">
-          <span className="text-sm font-medium text-gray-600">时间范围</span>
+          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">时间范围</span>
           <div className="flex items-center gap-2">
             <button
               onClick={() => { setTimeRangeType('week'); setWeekOffset(-1); }}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 timeRangeType === 'week'
                   ? 'bg-blue-500 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+              }`}>
               上周
             </button>
             <button
@@ -1139,9 +1159,8 @@ const Summary: React.FC = () => {
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 timeRangeType === 'year'
                   ? 'bg-blue-500 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+              }`}>
               年度
             </button>
             <button
@@ -1149,18 +1168,48 @@ const Summary: React.FC = () => {
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 timeRangeType === 'custom'
                   ? 'bg-blue-500 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+              }`}>
               自定义
             </button>
           </div>
-          
+
+          <span className="text-sm font-medium text-gray-600 dark:text-gray-400 ml-2">筛选模式</span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setDateFilterMode('created')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                dateFilterMode === 'created'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+              }`}>
+              创建时间
+            </button>
+            <button
+              onClick={() => setDateFilterMode('updated')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                dateFilterMode === 'updated'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+              }`}>
+              更新时间
+            </button>
+            <button
+              onClick={() => setDateFilterMode('created_or_updated')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                dateFilterMode === 'created_or_updated'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+              }`}>
+              创建或更新
+            </button>
+          </div>
+
           {timeRangeType === 'year' ? (
             <select
               value={selectedYear}
               onChange={(e) => setSelectedYear(Number(e.target.value))}
-              className="px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
+              className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
             >
               {yearOptions.map(year => (
                 <option key={year} value={year}>{year} 年</option>
@@ -1172,14 +1221,14 @@ const Summary: React.FC = () => {
                 type="date"
                 value={customDateRange.startDate}
                 onChange={(e) => setCustomDateRange(prev => ({ ...prev, startDate: e.target.value }))}
-                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
+                className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
               />
-              <span className="text-gray-400">至</span>
+              <span className="text-gray-400 dark:text-gray-500">至</span>
               <input
                 type="date"
                 value={customDateRange.endDate}
                 onChange={(e) => setCustomDateRange(prev => ({ ...prev, endDate: e.target.value }))}
-                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
+                className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
               />
             </div>
           )}
@@ -1196,7 +1245,7 @@ const Summary: React.FC = () => {
             <div className="flex items-center gap-2 ml-auto">
               <button
                 onClick={handleExportMarkdown}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all text-sm font-medium"
+                className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all text-sm font-medium dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -1205,7 +1254,7 @@ const Summary: React.FC = () => {
               </button>
               <button
                 onClick={handleExportWord}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-all text-sm font-medium"
+                className="flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-all text-sm font-medium dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-800"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -1213,12 +1262,12 @@ const Summary: React.FC = () => {
                 导出 Word
               </button>
 
-              <div className="w-px h-6 bg-gray-300 mx-1"></div>
+              <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1"></div>
 
               <button
                 onClick={handleExportTaskDataMarkdown}
                 disabled={!stats || stats.total === 0 || exportingTaskData}
-                className="flex items-center gap-2 px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 px-4 py-2 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 rounded-lg hover:bg-green-200 dark:hover:bg-green-800 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {exportingTaskData ? (
                   <>
@@ -1237,7 +1286,7 @@ const Summary: React.FC = () => {
               <button
                 onClick={handleExportTaskDataWord}
                 disabled={!stats || stats.total === 0 || exportingTaskData}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 rounded-lg hover:bg-emerald-200 dark:hover:bg-emerald-800 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {exportingTaskData ? (
                   <>
@@ -1259,62 +1308,62 @@ const Summary: React.FC = () => {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+        <div className="bg-red-50 border border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400 px-4 py-3 rounded-lg">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-8 text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
-          <p className="text-gray-500 mt-4">加载统计数据中...</p>
+          <p className="text-gray-500 dark:text-gray-400 mt-4">加载统计数据中...</p>
         </div>
       ) : stats ? (
         <>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
               统计概览
-              <span className="text-sm font-normal text-gray-500 ml-2">
+              <span className="text-sm font-normal text-gray-500 dark:text-gray-400 ml-2">
                 ({getDateRange().startDate} 至 {getDateRange().endDate})
               </span>
             </h3>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">指标</th>
-                    <th className="text-center py-3 px-4 text-sm font-medium text-gray-600">数值</th>
-                    <th className="text-center py-3 px-4 text-sm font-medium text-gray-600">状态</th>
+                  <tr className="border-b border-gray-200 dark:border-gray-700">
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-600 dark:text-gray-400">指标</th>
+                    <th className="text-center py-3 px-4 text-sm font-medium text-gray-600 dark:text-gray-400">数值</th>
+                    <th className="text-center py-3 px-4 text-sm font-medium text-gray-600 dark:text-gray-400">状态</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4 text-gray-700">任务总数</td>
-                    <td className="py-3 px-4 text-center font-semibold text-gray-900">{stats.total}</td>
-                    <td className="py-3 px-4 text-center text-gray-400">-</td>
+                  <tr className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td className="py-3 px-4 text-gray-700 dark:text-gray-300">任务总数</td>
+                    <td className="py-3 px-4 text-center font-semibold text-gray-900 dark:text-gray-100">{stats.total}</td>
+                    <td className="py-3 px-4 text-center text-gray-400 dark:text-gray-500">-</td>
                   </tr>
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4 text-gray-700">已完成</td>
-                    <td className="py-3 px-4 text-center font-semibold text-emerald-600">{stats.completed}</td>
+                  <tr className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td className="py-3 px-4 text-gray-700 dark:text-gray-300">已完成</td>
+                    <td className="py-3 px-4 text-center font-semibold text-emerald-600 dark:text-emerald-400">{stats.completed}</td>
                     <td className="py-3 px-4 text-center">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(stats.completionRate).color}`}>
                         {getStatusBadge(stats.completionRate).text}
                       </span>
                     </td>
                   </tr>
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4 text-gray-700">进行中</td>
-                    <td className="py-3 px-4 text-center font-semibold text-amber-600">{stats.inProgress}</td>
-                    <td className="py-3 px-4 text-center text-gray-400">-</td>
+                  <tr className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td className="py-3 px-4 text-gray-700 dark:text-gray-300">进行中</td>
+                    <td className="py-3 px-4 text-center font-semibold text-amber-600 dark:text-amber-400">{stats.inProgress}</td>
+                    <td className="py-3 px-4 text-center text-gray-400 dark:text-gray-500">-</td>
                   </tr>
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4 text-gray-700">待处理</td>
-                    <td className="py-3 px-4 text-center font-semibold text-blue-600">{stats.pending}</td>
-                    <td className="py-3 px-4 text-center text-gray-400">-</td>
+                  <tr className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td className="py-3 px-4 text-gray-700 dark:text-gray-300">待处理</td>
+                    <td className="py-3 px-4 text-center font-semibold text-blue-600 dark:text-blue-400">{stats.pending}</td>
+                    <td className="py-3 px-4 text-center text-gray-400 dark:text-gray-500">-</td>
                   </tr>
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4 text-gray-700">完成率</td>
-                    <td className="py-3 px-4 text-center font-semibold text-gray-900">{stats.completionRate.toFixed(1)}%</td>
+                  <tr className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td className="py-3 px-4 text-gray-700 dark:text-gray-300">完成率</td>
+                    <td className="py-3 px-4 text-center font-semibold text-gray-900 dark:text-gray-100">{stats.completionRate.toFixed(1)}%</td>
                     <td className="py-3 px-4 text-center">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(stats.completionRate).color}`}>
                         {getStatusBadge(stats.completionRate).text}
@@ -1322,16 +1371,16 @@ const Summary: React.FC = () => {
                     </td>
                   </tr>
                   {stats.avgCompletionTime !== undefined && (
-                    <tr className="hover:bg-gray-50">
-                      <td className="py-3 px-4 text-gray-700">平均完成时间</td>
-                      <td className="py-3 px-4 text-center font-semibold text-gray-900">{stats.avgCompletionTime.toFixed(1)}天</td>
+                    <tr className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                      <td className="py-3 px-4 text-gray-700 dark:text-gray-300">平均完成时间</td>
+                      <td className="py-3 px-4 text-center font-semibold text-gray-900 dark:text-gray-100">{stats.avgCompletionTime.toFixed(1)}天</td>
                       <td className="py-3 px-4 text-center">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                           stats.avgCompletionTime <= 3 
-                            ? 'bg-emerald-100 text-emerald-700' 
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' 
                             : stats.avgCompletionTime <= 7 
-                              ? 'bg-amber-100 text-amber-700' 
-                              : 'bg-red-100 text-red-700'
+                              ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' 
+                              : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                         }`}>
                           {stats.avgCompletionTime <= 3 ? '✅ 高效' : stats.avgCompletionTime <= 7 ? '⚠️ 正常' : '❌ 较慢'}
                         </span>
@@ -1346,7 +1395,7 @@ const Summary: React.FC = () => {
           {timeRangeType === 'week' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {completedTasks.length > 0 && (
-                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
                   <h3 className="text-lg font-semibold text-emerald-600 mb-3">
                     ✅ 已完成 ({completedTasks.length})
                   </h3>
@@ -1357,9 +1406,9 @@ const Summary: React.FC = () => {
                           {task.priority === 'high' ? '🔴' : task.priority === 'medium' ? '🟡' : '🟢'}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate">{task.title}</p>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{task.title}</p>
                           {task.completedAt && (
-                            <p className="text-xs text-gray-500">{task.completedAt.split('T')[0]}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">{task.completedAt.split('T')[0]}</p>
                           )}
                         </div>
                       </div>
@@ -1369,20 +1418,20 @@ const Summary: React.FC = () => {
               )}
               
               {inProgressTasks.length > 0 && (
-                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
                   <h3 className="text-lg font-semibold text-amber-600 mb-3">
                     🔄 进行中 ({inProgressTasks.length})
                   </h3>
                   <div className="space-y-2 max-h-60 overflow-y-auto">
                     {inProgressTasks.map((task, index) => (
-                      <div key={index} className="flex items-start gap-2 p-2 bg-amber-50 rounded-lg">
+                      <div key={index} className="flex items-start gap-2 p-2 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
                         <span className="text-sm">
                           {task.priority === 'high' ? '🔴' : task.priority === 'medium' ? '🟡' : '🟢'}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate">{task.title}</p>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{task.title}</p>
                           {task.dueDate && (
-                            <p className="text-xs text-gray-500">截止: {task.dueDate}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">截止: {task.dueDate}</p>
                           )}
                         </div>
                       </div>
@@ -1392,7 +1441,7 @@ const Summary: React.FC = () => {
               )}
               
               {pendingTasks.length > 0 && (
-                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
                   <h3 className="text-lg font-semibold text-blue-600 mb-3">
                     📋 待处理 ({pendingTasks.length})
                   </h3>
@@ -1403,9 +1452,9 @@ const Summary: React.FC = () => {
                           {task.priority === 'high' ? '🔴' : task.priority === 'medium' ? '🟡' : '🟢'}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate">{task.title}</p>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{task.title}</p>
                           {task.dueDate && (
-                            <p className="text-xs text-gray-500">截止: {task.dueDate}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">截止: {task.dueDate}</p>
                           )}
                         </div>
                       </div>
@@ -1419,105 +1468,105 @@ const Summary: React.FC = () => {
           {timeRangeType === 'year' && (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">状态分布</h3>
+                <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">状态分布</h3>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">待处理</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">待处理</span>
                       <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div className="w-32 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                           <div 
                             className="bg-blue-500 h-2 rounded-full" 
                             style={{ width: `${stats.total > 0 ? (stats.pending / stats.total) * 100 : 0}%` }}
                           ></div>
                         </div>
-                        <span className="text-sm font-medium text-gray-900">{stats.pending}</span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{stats.pending}</span>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">进行中</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">进行中</span>
                       <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div className="w-32 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                           <div 
                             className="bg-amber-500 h-2 rounded-full" 
                             style={{ width: `${stats.total > 0 ? (stats.inProgress / stats.total) * 100 : 0}%` }}
                           ></div>
                         </div>
-                        <span className="text-sm font-medium text-gray-900">{stats.inProgress}</span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{stats.inProgress}</span>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">已完成</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">已完成</span>
                       <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div className="w-32 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                           <div 
                             className="bg-emerald-500 h-2 rounded-full" 
                             style={{ width: `${stats.total > 0 ? (stats.completed / stats.total) * 100 : 0}%` }}
                           ></div>
                         </div>
-                        <span className="text-sm font-medium text-gray-900">{stats.completed}</span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{stats.completed}</span>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">已取消</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">已取消</span>
                       <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div className="w-32 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                           <div 
-                            className="bg-gray-400 h-2 rounded-full" 
+                            className="bg-gray-400 h-2 rounded-full dark:bg-gray-500" 
                             style={{ width: `${stats.total > 0 ? (stats.cancelled / stats.total) * 100 : 0}%` }}
                           ></div>
                         </div>
-                        <span className="text-sm font-medium text-gray-900">{stats.cancelled}</span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{stats.cancelled}</span>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">优先级分布</h3>
+                <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">优先级分布</h3>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">高优先级</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">高优先级</span>
                       <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div className="w-32 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                           <div 
                             className="bg-red-500 h-2 rounded-full" 
                             style={{ width: `${stats.total > 0 ? (stats.priorityDistribution.high / stats.total) * 100 : 0}%` }}
                           ></div>
                         </div>
-                        <span className="text-sm font-medium text-gray-900">{stats.priorityDistribution.high}</span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{stats.priorityDistribution.high}</span>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">中优先级</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">中优先级</span>
                       <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div className="w-32 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                           <div 
                             className="bg-yellow-500 h-2 rounded-full" 
                             style={{ width: `${stats.total > 0 ? (stats.priorityDistribution.medium / stats.total) * 100 : 0}%` }}
                           ></div>
                         </div>
-                        <span className="text-sm font-medium text-gray-900">{stats.priorityDistribution.medium}</span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{stats.priorityDistribution.medium}</span>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">低优先级</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">低优先级</span>
                       <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div className="w-32 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                           <div 
                             className="bg-green-500 h-2 rounded-full" 
                             style={{ width: `${stats.total > 0 ? (stats.priorityDistribution.low / stats.total) * 100 : 0}%` }}
                           ></div>
                         </div>
-                        <span className="text-sm font-medium text-gray-900">{stats.priorityDistribution.low}</span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{stats.priorityDistribution.low}</span>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">月度任务分布</h3>
+              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">月度任务分布</h3>
                 <div className="flex items-end gap-2 h-40">
                   {stats.monthlyDistribution.map((item, index) => {
                     const maxCount = Math.max(...stats.monthlyDistribution.map(m => m.count), 1)
@@ -1525,13 +1574,13 @@ const Summary: React.FC = () => {
                     return (
                       <div key={index} className="flex-1 flex flex-col items-center">
                         <div className="w-full flex flex-col items-center justify-end h-32">
-                          <span className="text-xs text-gray-500 mb-1">{item.count}</span>
+                          <span className="text-xs text-gray-500 dark:text-gray-400 mb-1">{item.count}</span>
                           <div 
                             className="w-full bg-blue-500 rounded-t transition-all duration-300"
                             style={{ height: `${height}%`, minHeight: item.count > 0 ? '4px' : '0' }}
                           ></div>
                         </div>
-                        <span className="text-xs text-gray-500 mt-2">{index + 1}月</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400 mt-2">{index + 1}月</span>
                       </div>
                     )
                   })}
@@ -1540,15 +1589,15 @@ const Summary: React.FC = () => {
             </>
           )}
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">智能总结</h3>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">智能总结</h3>
               <div className="flex items-center gap-2">
                 {summary && (
                   <>
                     <button
                       onClick={handleExportSummaryMarkdown}
-                      className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all text-sm font-medium"
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all text-sm font-medium dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -1557,7 +1606,7 @@ const Summary: React.FC = () => {
                     </button>
                     <button
                       onClick={handleExportSummaryWord}
-                      className="flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-all text-sm font-medium"
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-all text-sm font-medium dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-800"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -1589,16 +1638,16 @@ const Summary: React.FC = () => {
             </div>
 
             {summary ? (
-              <div className="prose max-w-none bg-gray-50 rounded-lg p-6">
+              <div className="prose max-w-none bg-gray-50 dark:bg-gray-900 rounded-lg p-6">
                 {renderMarkdown(summary)}
               </div>
             ) : (
-              <div className="text-center py-8 bg-gray-50 rounded-lg">
-                <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="text-center py-8 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                <svg className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <p className="text-gray-500 mb-2">点击上方按钮生成智能总结</p>
-                <p className="text-sm text-gray-400">需要配置 LLM API Key 才能使用此功能</p>
+                <p className="text-gray-500 dark:text-gray-400 mb-2">点击上方按钮生成智能总结</p>
+                <p className="text-sm text-gray-400 dark:text-gray-500">需要配置 LLM API Key 才能使用此功能</p>
               </div>
             )}
           </div>

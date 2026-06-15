@@ -138,6 +138,8 @@ function initDatabase() {
         status TEXT DEFAULT 'in_progress',
         priority TEXT DEFAULT 'medium',
         due_date TEXT,
+        parent_id INTEGER DEFAULT NULL,
+        sort_order INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       )
@@ -223,6 +225,16 @@ function initDatabase() {
     }
     if (!existingColumns.includes('ocr_timestamp')) {
       db.exec('ALTER TABLE image_texts ADD COLUMN ocr_timestamp TEXT')
+    }
+
+    // 迁移：为 tasks 表新增 parent_id 和 sort_order 字段
+    const tasksInfo = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
+    const taskColumns = tasksInfo.map(col => col.name)
+    if (!taskColumns.includes('parent_id')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN parent_id INTEGER DEFAULT NULL')
+    }
+    if (!taskColumns.includes('sort_order')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0')
     }
   } catch (error) {
     logger.error('Failed to initialize database:', error)
@@ -433,15 +445,15 @@ app.on('window-all-closed', () => {
   }
 })
 
-ipcMain.handle('task:create', async (_event, task: { title: string; description?: string; status?: string; priority?: string; due_date?: string }) => {
-  const stmt = db?.prepare('INSERT INTO tasks (title, description, status, priority, due_date) VALUES (?, ?, ?, ?, ?)')
-  const result = stmt?.run(task.title, task.description || null, task.status || 'in_progress', task.priority || 'medium', task.due_date || null)
+ipcMain.handle('task:create', async (_event, task: { title: string; description?: string; status?: string; priority?: string; due_date?: string; parent_id?: number; sort_order?: number }) => {
+  const stmt = db?.prepare('INSERT INTO tasks (title, description, status, priority, due_date, parent_id, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)')
+  const result = stmt?.run(task.title, task.description || null, task.status || 'in_progress', task.priority || 'medium', task.due_date || null, task.parent_id !== undefined ? task.parent_id : null, task.sort_order || 0)
   const taskId = result?.lastInsertRowid as number
 
   if (taskId) {
-    addHistoryRecord(taskId, 'created', null, JSON.stringify({ title: task.title, description: task.description, status: task.status || 'in_progress', priority: task.priority || 'medium', due_date: task.due_date }))
+    addHistoryRecord(taskId, 'created', null, JSON.stringify({ title: task.title, description: task.description, status: task.status || 'in_progress', priority: task.priority || 'medium', due_date: task.due_date, parent_id: task.parent_id !== undefined ? task.parent_id : null }))
     updateTaskEmbedding(taskId, task.title, task.description || null).catch(err => logger.error('Failed to generate embedding:', err))
-    
+
     if (task.description) {
       const imageMatches = [...task.description.matchAll(/!\[.*?\]\(local:\/\/([^)]+)\)/g)]
       for (const match of imageMatches) {
@@ -454,9 +466,9 @@ ipcMain.handle('task:create', async (_event, task: { title: string; description?
   return taskId
 })
 
-ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: string; description?: string; status?: string; priority?: string; due_date?: string }) => {
+ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: string; description?: string; status?: string; priority?: string; due_date?: string; parent_id?: number | null; sort_order?: number }) => {
   const getStmt = db?.prepare('SELECT * FROM tasks WHERE id = ?')
-  const oldTask = getStmt?.get(taskId) as { title: string; description: string; status: string; priority: string; due_date: string | null } | undefined
+  const oldTask = getStmt?.get(taskId) as { title: string; description: string; status: string; priority: string; due_date: string | null; parent_id: number | null; sort_order: number } | undefined
 
   if (!oldTask) {
     return false
@@ -501,6 +513,20 @@ ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: str
     changes.new.due_date = task.due_date
   }
 
+  if (task.parent_id !== undefined && task.parent_id !== oldTask.parent_id) {
+    updates.push('parent_id = ?')
+    values.push(task.parent_id === null ? null : String(task.parent_id))
+    changes.old.parent_id = oldTask.parent_id
+    changes.new.parent_id = task.parent_id
+  }
+
+  if (task.sort_order !== undefined && task.sort_order !== oldTask.sort_order) {
+    updates.push('sort_order = ?')
+    values.push(String(task.sort_order))
+    changes.old.sort_order = oldTask.sort_order
+    changes.new.sort_order = task.sort_order
+  }
+
   if (updates.length === 0) {
     return true
   }
@@ -527,7 +553,7 @@ ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: str
 ipcMain.handle('task:delete', (_event, taskId: number) => {
   try {
     const getStmt = db?.prepare('SELECT * FROM tasks WHERE id = ?')
-    const task = getStmt?.get(taskId) as { id: number; description: string | null } | undefined
+    const task = getStmt?.get(taskId) as { id: number; description: string | null; parent_id: number | null } | undefined
 
     if (!task) {
       return false
@@ -535,7 +561,7 @@ ipcMain.handle('task:delete', (_event, taskId: number) => {
 
     const imagesDir = getImagesDir()
     const imageFiles: string[] = []
-    
+
     if (task.description) {
       const imageMatches = [...task.description.matchAll(/!\[.*?\]\(local:\/\/([^)]+)\)/g)]
       for (const match of imageMatches) {
@@ -545,12 +571,36 @@ ipcMain.handle('task:delete', (_event, taskId: number) => {
 
     try {
       const deleteTransaction = db?.transaction(() => {
+        // 递归收集所有子任务 ID
+        const collectSubtaskIds = (parentId: number): number[] => {
+          const subtasks = db?.prepare('SELECT id FROM tasks WHERE parent_id = ?').all(parentId) as { id: number }[] || []
+          let ids: number[] = []
+          for (const subtask of subtasks) {
+            ids.push(subtask.id)
+            ids = ids.concat(collectSubtaskIds(subtask.id))
+          }
+          return ids
+        }
+
+        const subtaskIds = collectSubtaskIds(taskId)
+        const allIdsToDelete = [taskId, ...subtaskIds]
+
         db?.exec('PRAGMA foreign_keys = OFF')
         try {
-          db?.prepare('DELETE FROM task_embeddings WHERE task_id = ?').run(taskId)
-          db?.prepare('DELETE FROM task_history WHERE task_id = ?').run(taskId)
-          db?.prepare('DELETE FROM image_texts WHERE task_id = ?').run(taskId)
-          db?.prepare('DELETE FROM tasks WHERE id = ?').run(taskId)
+          for (const id of allIdsToDelete) {
+            // 收集子任务的图片引用
+            const subtask = db?.prepare('SELECT description FROM tasks WHERE id = ?').get(id) as { description: string | null } | undefined
+            if (subtask?.description) {
+              const subImageMatches = [...subtask.description.matchAll(/!\[.*?\]\(local:\/\/([^)]+)\)/g)]
+              for (const match of subImageMatches) {
+                imageFiles.push(match[1])
+              }
+            }
+            db?.prepare('DELETE FROM task_embeddings WHERE task_id = ?').run(id)
+            db?.prepare('DELETE FROM task_history WHERE task_id = ?').run(id)
+            db?.prepare('DELETE FROM image_texts WHERE task_id = ?').run(id)
+            db?.prepare('DELETE FROM tasks WHERE id = ?').run(id)
+          }
         } catch (innerError) {
           logger.error('Database transaction error during task deletion:', innerError)
           throw innerError
@@ -589,7 +639,7 @@ ipcMain.handle('task:get', (_event, taskId: number) => {
 })
 
 ipcMain.handle('task:list', (_event, filters?: { date?: string; status?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => {
-  let sql = 'SELECT * FROM tasks WHERE 1=1'
+  let sql = 'SELECT * FROM tasks WHERE 1=1 AND parent_id IS NULL'
   const params: string[] = []
   const dateField = filters?.dateFilterMode === 'updated' ? 'updated_at'
     : filters?.dateFilterMode === 'created_or_updated' ? null
@@ -642,18 +692,37 @@ ipcMain.handle('task:list', (_event, filters?: { date?: string; status?: string;
   return stmt?.all(...params) || []
 })
 
-ipcMain.handle('task:listWithHistory', (_event, filters?: { startDate?: string; endDate?: string }) => {
-  let sql = 'SELECT * FROM tasks WHERE 1=1'
+ipcMain.handle('task:listWithHistory', (_event, filters?: { startDate?: string; endDate?: string; dateFilterMode?: string }) => {
+  let sql = 'SELECT * FROM tasks WHERE 1=1 AND parent_id IS NULL'
   const params: string[] = []
+  const dateField = filters?.dateFilterMode === 'updated' ? 'updated_at'
+    : filters?.dateFilterMode === 'created_or_updated' ? null
+    : 'created_at'
 
-  if (filters?.startDate) {
-    sql += " AND date(created_at, 'localtime') >= ?"
-    params.push(filters.startDate)
-  }
-
-  if (filters?.endDate) {
-    sql += " AND date(created_at, 'localtime') <= ?"
-    params.push(filters.endDate)
+  if (filters?.startDate && filters?.endDate) {
+    if (dateField) {
+      sql += ` AND date(${dateField}, 'localtime') >= ? AND date(${dateField}, 'localtime') <= ?`
+      params.push(filters.startDate, filters.endDate)
+    } else {
+      sql += ` AND ((date(created_at, 'localtime') >= ? AND date(created_at, 'localtime') <= ?) OR (date(updated_at, 'localtime') >= ? AND date(updated_at, 'localtime') <= ?))`
+      params.push(filters.startDate, filters.endDate, filters.startDate, filters.endDate)
+    }
+  } else if (filters?.startDate) {
+    if (dateField) {
+      sql += ` AND date(${dateField}, 'localtime') >= ?`
+      params.push(filters.startDate)
+    } else {
+      sql += ` AND (date(created_at, 'localtime') >= ? OR date(updated_at, 'localtime') >= ?)`
+      params.push(filters.startDate, filters.startDate)
+    }
+  } else if (filters?.endDate) {
+    if (dateField) {
+      sql += ` AND date(${dateField}, 'localtime') <= ?`
+      params.push(filters.endDate)
+    } else {
+      sql += ` AND (date(created_at, 'localtime') <= ? OR date(updated_at, 'localtime') <= ?)`
+      params.push(filters.endDate, filters.endDate)
+    }
   }
 
   sql += ' ORDER BY created_at DESC'
@@ -669,7 +738,7 @@ ipcMain.handle('task:listWithHistory', (_event, filters?: { startDate?: string; 
 })
 
 ipcMain.handle('task:getCounts', (_event, filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => {
-  let sql = 'SELECT status, COUNT(*) as count FROM tasks'
+  let sql = 'SELECT status, COUNT(*) as count FROM tasks WHERE parent_id IS NULL'
   const conditions: string[] = []
   const params: string[] = []
   const dateField = filters?.dateFilterMode === 'updated' ? 'updated_at'
@@ -713,7 +782,7 @@ ipcMain.handle('task:getCounts', (_event, filters?: { date?: string; startDate?:
   }
 
   if (conditions.length > 0) {
-    sql += ' WHERE ' + conditions.join(' AND ')
+    sql += ' AND ' + conditions.join(' AND ')
   }
 
   sql += ' GROUP BY status'
@@ -741,7 +810,7 @@ ipcMain.handle('task:getCounts', (_event, filters?: { date?: string; startDate?:
 })
 
 ipcMain.handle('task:earliest-date', () => {
-  const result = db?.prepare("SELECT date(MIN(created_at), 'localtime') as earliest_date FROM tasks").get() as { earliest_date: string | null } | undefined
+  const result = db?.prepare("SELECT date(MIN(created_at), 'localtime') as earliest_date FROM tasks WHERE parent_id IS NULL").get() as { earliest_date: string | null } | undefined
   if (result?.earliest_date) {
     return result.earliest_date
   }
@@ -750,6 +819,47 @@ ipcMain.handle('task:earliest-date', () => {
   const month = String(today.getMonth() + 1).padStart(2, '0')
   const day = String(today.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+})
+
+ipcMain.handle('task:listSubtasks', (_event, parentId: number) => {
+  const stmt = db?.prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY sort_order ASC, created_at ASC')
+  return stmt?.all(parentId) || []
+})
+
+ipcMain.handle('task:getSubtaskCounts', (_event, taskId: number) => {
+  const total = (db?.prepare('SELECT COUNT(*) as count FROM tasks WHERE parent_id = ?').get(taskId) as { count: number } | undefined)?.count || 0
+  const completed = (db?.prepare("SELECT COUNT(*) as count FROM tasks WHERE parent_id = ? AND status = 'completed'").get(taskId) as { count: number } | undefined)?.count || 0
+  return { total, completed }
+})
+
+ipcMain.handle('task:getActivityTimeline', (_event, taskId: number, options?: { limit?: number; offset?: number }) => {
+  const limit = options?.limit ?? 20
+  const offset = options?.offset ?? 0
+
+  // 获取父任务及所有子任务的 ID
+  const subtasks = db?.prepare('SELECT id, title, parent_id FROM tasks WHERE parent_id = ?').all(taskId) as { id: number; title: string; parent_id: number | null }[] || []
+
+  const allTaskIds = [taskId, ...subtasks.map(s => s.id)]
+
+  // 构建参数占位符
+  const placeholders = allTaskIds.map(() => '?').join(',')
+
+  const sql = `SELECT h.*, t.title as task_title, t.parent_id as task_parent_id FROM task_history h LEFT JOIN tasks t ON h.task_id = t.id WHERE h.task_id IN (${placeholders}) ORDER BY h.timestamp DESC LIMIT ? OFFSET ?`
+
+  const stmt = db?.prepare(sql)
+  const records = stmt?.all(...allTaskIds, limit, offset) as any[] || []
+
+  return records.map(record => ({
+    id: record.id,
+    task_id: record.task_id,
+    action: record.action,
+    old_value: record.old_value,
+    new_value: record.new_value,
+    timestamp: record.timestamp,
+    source_task_id: record.task_id,
+    source_task_title: record.task_title || '',
+    source_parent_id: record.task_parent_id ?? null
+  }))
 })
 
 ipcMain.handle('history:getByTaskId', (_event, taskId: number, options?: { limit?: number; offset?: number }) => {
@@ -848,7 +958,7 @@ ipcMain.handle('search:semantic', async (_event, query: string, options?: { limi
       params.push(options.endDate)
     }
 
-    const tasksWithEmbeddings = db?.prepare(sql).all(...params) as { id: number; title: string; description: string | null; status: string; priority: string; due_date: string | null; created_at: string; updated_at: string; embedding: string }[]
+    const tasksWithEmbeddings = db?.prepare(sql).all(...params) as { id: number; title: string; description: string | null; status: string; priority: string; due_date: string | null; parent_id: number | null; sort_order: number; created_at: string; updated_at: string; embedding: string }[]
 
     const results = tasksWithEmbeddings
       .map(task => {
@@ -906,7 +1016,7 @@ ipcMain.handle('search:hybrid', async (_event, query: string, options?: { limit?
       keywordParams.push(options.endDate)
     }
 
-    const keywordResults = db?.prepare(keywordSql).all(...keywordParams) as { id: number; title: string; description: string | null; status: string; created_at: string; updated_at: string; keyword_match: number }[]
+    const keywordResults = db?.prepare(keywordSql).all(...keywordParams) as { id: number; title: string; description: string | null; status: string; priority: string; due_date: string | null; parent_id: number | null; sort_order: number; created_at: string; updated_at: string; keyword_match: number }[]
     logger.info('[search:hybrid] Keyword results count:', keywordResults?.length || 0)
     if (keywordResults && keywordResults.length > 0) {
       logger.info('[search:hybrid] Keyword result IDs:', keywordResults.map(r => r.id).join(', '))
@@ -930,7 +1040,7 @@ ipcMain.handle('search:hybrid', async (_event, query: string, options?: { limit?
       embeddingParams.push(options.endDate)
     }
 
-    const tasksWithEmbeddings = db?.prepare(embeddingSql).all(...embeddingParams) as { id: number; title: string; description: string | null; status: string; priority: string; due_date: string | null; created_at: string; updated_at: string; embedding: string }[]
+    const tasksWithEmbeddings = db?.prepare(embeddingSql).all(...embeddingParams) as { id: number; title: string; description: string | null; status: string; priority: string; due_date: string | null; parent_id: number | null; sort_order: number; created_at: string; updated_at: string; embedding: string }[]
 
     const keywordMatchSet = new Set(keywordResults.map(t => t.id))
 
@@ -944,6 +1054,8 @@ ipcMain.handle('search:hybrid', async (_event, query: string, options?: { limit?
         status: task.status,
         priority: task.priority,
         due_date: task.due_date,
+        parent_id: task.parent_id,
+        sort_order: task.sort_order,
         created_at: task.created_at,
         updated_at: task.updated_at,
         similarity,

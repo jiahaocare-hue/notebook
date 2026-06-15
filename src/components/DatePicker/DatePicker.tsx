@@ -139,7 +139,7 @@ const DatePicker: React.FC<DatePickerProps> = ({
   const dropdown = isOpen ? (
     <div
       ref={dropdownRef}
-      className="fixed bg-white rounded-2xl shadow-xl border border-gray-100 p-4 w-[300px] z-[9999]"
+      className="fixed bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-gray-100 dark:border-gray-700 p-4 w-[300px] z-[9999]"
       style={{
         top: position.top,
         left: position.left,
@@ -150,23 +150,23 @@ const DatePicker: React.FC<DatePickerProps> = ({
         <button
           type="button"
           onClick={handlePrevMonth}
-          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
         >
-          <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </button>
         <div className="text-center">
-          <span className="text-lg font-semibold text-gray-800">
+          <span className="text-lg font-semibold text-gray-800 dark:text-gray-100">
             {viewYear}年 {monthNames[viewMonth]}
           </span>
         </div>
         <button
           type="button"
           onClick={handleNextMonth}
-          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
         >
-          <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
         </button>
@@ -177,7 +177,7 @@ const DatePicker: React.FC<DatePickerProps> = ({
           <div
             key={day}
             className={`text-center text-xs font-medium py-2 ${
-              index === 0 || index === 6 ? 'text-red-400' : 'text-gray-400'
+              index === 0 || index === 6 ? 'text-red-400' : 'text-gray-400 dark:text-gray-500'
             }`}
           >
             {day}
@@ -207,10 +207,10 @@ const DatePicker: React.FC<DatePickerProps> = ({
                 isSelected
                   ? 'bg-blue-500 text-white'
                   : isTodayDate
-                  ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-300'
+                  ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-300 dark:bg-blue-900/30 dark:text-blue-400 dark:ring-blue-700'
                   : isWeekend
-                  ? 'text-red-400 hover:bg-gray-50'
-                  : 'text-gray-700 hover:bg-gray-50'
+                  ? 'text-red-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700'
               }`}
             >
               {day}
@@ -219,21 +219,21 @@ const DatePicker: React.FC<DatePickerProps> = ({
         })}
       </div>
 
-      <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-100">
+      <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-100 dark:border-gray-700">
         <button
           type="button"
           onClick={() => {
             setViewYear(today.getFullYear())
             setViewMonth(today.getMonth())
           }}
-          className="text-sm text-blue-500 hover:text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-50 transition-colors"
+          className="text-sm text-blue-500 hover:text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
         >
           今天
         </button>
         <button
           type="button"
           onClick={handleClear}
-          className="text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-50 transition-colors"
+          className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
         >
           清除
         </button>
@@ -246,11 +246,11 @@ const DatePicker: React.FC<DatePickerProps> = ({
       <button
         type="button"
         onClick={handleToggle}
-        className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-left text-sm hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all flex items-center justify-between"
+        className="w-full px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-xl text-left text-sm hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all flex items-center justify-between"
       >
-        <span className={value ? 'text-gray-800' : 'text-gray-400'}>{displayValue}</span>
+        <span className={value ? 'text-gray-800 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'}>{displayValue}</span>
         <svg
-          className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -290,7 +290,7 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
         onChange={onStartDateChange}
         placeholder={startPlaceholder}
       />
-      <span className="text-gray-400 text-sm">至</span>
+      <span className="text-gray-400 dark:text-gray-500 text-sm">至</span>
       <DatePicker
         value={endDate}
         onChange={onEndDateChange}

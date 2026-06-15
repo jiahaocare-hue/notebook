@@ -185,7 +185,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
           标题 <span className="text-red-500">*</span>
         </label>
         <input
@@ -193,7 +193,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           placeholder="输入任务标题..."
           required
           disabled={isSubmitting}
@@ -201,13 +201,13 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
           描述
         </label>
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
           placeholder="输入任务描述..."
           rows={3}
           disabled={isSubmitting}
@@ -215,7 +215,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
           图片
         </label>
         <input
@@ -231,7 +231,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
             <img
               src={imagePreview.dataUrl}
               alt="预览"
-              className="max-w-full h-32 object-cover rounded-lg border border-gray-200"
+              className="max-w-full h-32 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
             />
             <button
               type="button"
@@ -249,7 +249,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               disabled={isSubmitting}
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -257,11 +257,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
               </svg>
               <span>添加图片</span>
             </button>
-            <span className="text-sm text-gray-400">或按 Ctrl+V 粘贴图片</span>
+            <span className="text-sm text-gray-400 dark:text-gray-500">或按 Ctrl+V 粘贴图片</span>
           </div>
         )}
         {pasteStatus === 'success' && (
-          <div className="mt-1 text-sm text-green-600">
+          <div className="mt-1 text-sm text-green-600 dark:text-green-400">
             图片已粘贴
           </div>
         )}
@@ -269,13 +269,13 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             状态
           </label>
           <select
             value={status}
             onChange={(e) => setStatus(e.target.value as Task['status'])}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             disabled={isSubmitting}
           >
             <option value="pending">待处理</option>
@@ -286,13 +286,13 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             优先级
           </label>
           <select
             value={priority}
             onChange={(e) => setPriority(e.target.value as Task['priority'])}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             disabled={isSubmitting}
           >
             <option value="low">低</option>
@@ -303,7 +303,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
           截止日期
         </label>
         <DatePicker
@@ -317,7 +317,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ task, defaultDate, onSubmit, onCanc
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+          className="px-4 py-2 text-gray-700 bg-gray-100 dark:text-gray-300 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
           disabled={isSubmitting}
         >
           取消

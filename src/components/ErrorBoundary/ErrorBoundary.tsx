@@ -35,7 +35,7 @@ class ErrorBoundary extends Component<Props, State> {
       }
 
       return (
-        <div className="min-h-[200px] flex flex-col items-center justify-center p-8 bg-red-50 rounded-xl border border-red-200">
+        <div className="min-h-[200px] flex flex-col items-center justify-center p-8 bg-red-50 rounded-xl border border-red-200 dark:bg-red-900/20 dark:border-red-800">
           <svg
             className="w-16 h-16 text-red-400 mb-4"
             fill="none"
@@ -50,7 +50,7 @@ class ErrorBoundary extends Component<Props, State> {
             />
           </svg>
           <h2 className="text-xl font-semibold text-red-700 mb-2">出错了</h2>
-          <p className="text-red-600 text-center mb-4">
+          <p className="text-red-600 dark:text-red-400 text-center mb-4">
             {this.state.error?.message || '发生了未知错误'}
           </p>
           <button

@@ -4,28 +4,30 @@ import { Task } from '../../types'
 interface TaskCardProps {
   task: Task
   onClick: (task: Task) => void
+  subtaskCount?: number
+  subtaskCompleted?: number
 }
 
 const PRIORITY_CONFIGS = {
   high: {
     label: '高优先级',
-    bgColor: 'bg-red-50',
-    textColor: 'text-red-600',
-    borderColor: 'border-red-200',
+    bgColor: 'bg-red-50 dark:bg-red-900/30',
+    textColor: 'text-red-600 dark:text-red-400',
+    borderColor: 'border-red-200 dark:border-red-800',
     dotColor: 'bg-red-500',
   },
   medium: {
     label: '中优先级',
-    bgColor: 'bg-amber-50',
-    textColor: 'text-amber-600',
-    borderColor: 'border-amber-200',
+    bgColor: 'bg-amber-50 dark:bg-amber-900/30',
+    textColor: 'text-amber-600 dark:text-amber-400',
+    borderColor: 'border-amber-200 dark:border-amber-800',
     dotColor: 'bg-amber-500',
   },
   low: {
     label: '低优先级',
-    bgColor: 'bg-blue-50',
-    textColor: 'text-blue-600',
-    borderColor: 'border-blue-200',
+    bgColor: 'bg-blue-50 dark:bg-blue-900/30',
+    textColor: 'text-blue-600 dark:text-blue-400',
+    borderColor: 'border-blue-200 dark:border-blue-800',
     dotColor: 'bg-blue-500',
   },
 }
@@ -33,26 +35,26 @@ const PRIORITY_CONFIGS = {
 const STATUS_CONFIGS = {
   in_progress: {
     label: '进行中',
-    bgColor: 'bg-blue-50',
-    textColor: 'text-blue-600',
+    bgColor: 'bg-blue-50 dark:bg-blue-900/30',
+    textColor: 'text-blue-600 dark:text-blue-400',
     dotColor: 'bg-blue-500',
   },
   completed: {
     label: '已完成',
-    bgColor: 'bg-green-50',
-    textColor: 'text-green-600',
+    bgColor: 'bg-green-50 dark:bg-green-900/30',
+    textColor: 'text-green-600 dark:text-green-400',
     dotColor: 'bg-green-500',
   },
   cancelled: {
     label: '已取消',
-    bgColor: 'bg-red-50',
-    textColor: 'text-red-600',
+    bgColor: 'bg-red-50 dark:bg-red-900/30',
+    textColor: 'text-red-600 dark:text-red-400',
     dotColor: 'bg-red-500',
   },
   pending: {
     label: '待处理',
-    bgColor: 'bg-yellow-50',
-    textColor: 'text-yellow-600',
+    bgColor: 'bg-yellow-50 dark:bg-yellow-900/30',
+    textColor: 'text-yellow-600 dark:text-yellow-400',
     dotColor: 'bg-yellow-500',
   },
 }
@@ -77,7 +79,7 @@ const formatDateTime = (dateString: string) => {
   })
 }
 
-const TaskCard: React.FC<TaskCardProps> = React.memo(({ task, onClick }) => {
+const TaskCard: React.FC<TaskCardProps> = React.memo(({ task, onClick, subtaskCount, subtaskCompleted }) => {
   const displayDescription = useMemo(() => {
     if (!task.description) return ''
     const textOnly = task.description
@@ -98,10 +100,10 @@ const TaskCard: React.FC<TaskCardProps> = React.memo(({ task, onClick }) => {
   return (
     <div
       onClick={() => onClick(task)}
-      className="group bg-white rounded-xl shadow-sm border border-gray-100 p-5 cursor-pointer transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg hover:border-gray-200"
+      className="group bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5 cursor-pointer transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg hover:border-gray-200 dark:hover:border-gray-600"
     >
       <div className="flex items-start justify-between gap-3 mb-3">
-        <h3 className="text-base font-semibold text-gray-900 line-clamp-1 group-hover:text-blue-600 transition-colors">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 line-clamp-1 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
           {task.title}
         </h3>
         <span
@@ -113,10 +115,24 @@ const TaskCard: React.FC<TaskCardProps> = React.memo(({ task, onClick }) => {
       </div>
 
       {displayDescription && (
-        <p className="text-gray-500 text-sm mb-4 line-clamp-2 leading-relaxed">{displayDescription}</p>
+        <p className="text-gray-500 dark:text-gray-400 text-sm mb-4 line-clamp-2 leading-relaxed">{displayDescription}</p>
       )}
 
-      <div className="flex items-center justify-between pt-3 border-t border-gray-50">
+      {(subtaskCount !== undefined && subtaskCount > 0) && (
+        <div className="flex items-center gap-2 mb-3">
+          <div className="flex-1 h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+              style={{ width: `${subtaskCount > 0 ? (subtaskCompleted! / subtaskCount) * 100 : 0}%` }}
+            />
+          </div>
+          <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">
+            {subtaskCompleted}/{subtaskCount}
+          </span>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between pt-3 border-t border-gray-50 dark:border-gray-700">
         <div className="flex items-center gap-2">
           <span
             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border ${priorityConfig.bgColor} ${priorityConfig.textColor} ${priorityConfig.borderColor}`}
@@ -126,9 +142,9 @@ const TaskCard: React.FC<TaskCardProps> = React.memo(({ task, onClick }) => {
           </span>
         </div>
 
-        <div className="flex items-center gap-3 text-xs text-gray-400">
+        <div className="flex items-center gap-3 text-xs text-gray-400 dark:text-gray-500">
           {task.due_date && (
-            <span className={`flex items-center gap-1 ${isOverdue ? 'text-red-500' : ''}`}>
+            <span className={`flex items-center gap-1 ${isOverdue ? 'text-red-500 dark:text-red-400' : ''}`}>
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   strokeLinecap="round"

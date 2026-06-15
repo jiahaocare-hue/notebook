@@ -28,7 +28,8 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [taskToDelete, setTaskToDelete] = useState<number | null>(null)
-  
+  const [subtaskCounts, setSubtaskCounts] = useState<Record<number, { total: number; completed: number }>>({})
+
   const [historyStartDate, setHistoryStartDate] = useState<string>(() => {
     const date = new Date()
     const year = date.getFullYear()
@@ -54,7 +55,27 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       })
     }
   }, [dateFilter])
-  
+
+  useEffect(() => {
+    const loadSubtaskCounts = async () => {
+      const counts: Record<number, { total: number; completed: number }> = {}
+      for (const task of tasks) {
+        try {
+          const result = await taskApi.getSubtaskCounts(task.id)
+          if (result.total > 0) {
+            counts[task.id] = result
+          }
+        } catch (err) {
+          // 忽略单个任务的统计错误
+        }
+      }
+      setSubtaskCounts(counts)
+    }
+    if (tasks.length > 0) {
+      loadSubtaskCounts()
+    }
+  }, [tasks])
+
   const [sortType, setSortType] = useState<SortType>('created_at')
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
   const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('created')
@@ -314,9 +335,9 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">{getPageTitle()}</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">{getPageTitle()}</h1>
           {getPageSubtitle() && (
-            <p className="text-sm text-gray-500 mt-1">{getPageSubtitle()}</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{getPageSubtitle()}</p>
           )}
         </div>
         <button
@@ -331,9 +352,9 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       </div>
 
       {dateFilter === 'history' && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4">
           <div className="flex items-center gap-4">
-            <span className="text-sm font-medium text-gray-600">时间范围</span>
+            <span className="text-sm font-medium text-gray-600 dark:text-gray-400">时间范围</span>
             <DateRangePicker
               startDate={historyStartDate}
               endDate={historyEndDate}
@@ -350,8 +371,8 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
               查询
             </button>
           </div>
-          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
-            <span className="text-sm font-medium text-gray-600">筛选方式</span>
+          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
+            <span className="text-sm font-medium text-gray-600 dark:text-gray-400">筛选方式</span>
             <div className="flex items-center gap-1">
               {([
                 { value: 'created' as DateFilterMode, label: '创建时间' },
@@ -364,7 +385,7 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
                   className={`px-3 py-1 text-xs rounded-md transition-colors ${
                     dateFilterMode === value
                       ? 'bg-blue-500 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
                   }`}
                 >
                   {label}
@@ -376,14 +397,14 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       )}
 
       {sortedTasks.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-3">
           <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-600">排序：</span>
+            <span className="text-sm text-gray-600 dark:text-gray-400">排序：</span>
             <div className="flex items-center gap-2">
               <select
                 value={sortType}
                 onChange={(e) => setSortType(e.target.value as SortType)}
-                className="px-3 py-1.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
+                className="px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
               >
                 <option value="created_at">创建时间</option>
                 <option value="due_date">截止时间</option>
@@ -391,7 +412,7 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
               </select>
               <button
                 onClick={toggleSortOrder}
-                className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-sm"
+                className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-sm text-gray-700 dark:text-gray-300"
               >
                 {sortOrder === 'asc' ? (
                   <>
@@ -415,17 +436,17 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+        <div className="bg-red-50 border border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400 px-4 py-3 rounded-lg">
           {error}
         </div>
       )}
 
       {sortedTasks.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
-          <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-8 text-center">
+          <svg className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
           </svg>
-          <p className="text-gray-500 mb-4">{getEmptyMessage()}</p>
+          <p className="text-gray-500 dark:text-gray-400 mb-4">{getEmptyMessage()}</p>
           <button
             onClick={handleCreateTask}
             className="text-blue-500 hover:text-blue-600 font-medium"
@@ -436,7 +457,13 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       ) : (
         <div className="space-y-3">
           {sortedTasks.map((task) => (
-            <TaskCard key={task.id} task={task} onClick={handleTaskClick} />
+            <TaskCard
+              key={task.id}
+              task={task}
+              onClick={handleTaskClick}
+              subtaskCount={subtaskCounts[task.id]?.total}
+              subtaskCompleted={subtaskCounts[task.id]?.completed}
+            />
           ))}
         </div>
       )}

@@ -1,4 +1,4 @@
-import { Task, NewTask, UpdateTask, TaskHistory, TaskFilters, SearchMode, SearchOptions, SummaryRequest } from '../types'
+import { Task, NewTask, UpdateTask, TaskHistory, TaskFilters, SearchMode, SearchOptions, SummaryRequest, ActivityTimelineItem, SubtaskCounts } from '../types'
 
 export type TaskWithHistory = Task & { history: TaskHistory[] }
 
@@ -10,9 +10,12 @@ declare global {
       deleteTask: (taskId: number) => Promise<boolean>
       getTask: (taskId: number) => Promise<Task | undefined>
       listTasks: (filters?: TaskFilters) => Promise<Task[]>
-      listTasksWithHistory: (filters?: { startDate?: string; endDate?: string }) => Promise<TaskWithHistory[]>
+      listTasksWithHistory: (filters?: { startDate?: string; endDate?: string; dateFilterMode?: string }) => Promise<TaskWithHistory[]>
       getCounts: (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }>
       getEarliestTaskDate: () => Promise<string>
+      listSubtasks: (parentId: number) => Promise<Task[]>
+      getSubtaskCounts: (taskId: number) => Promise<SubtaskCounts>
+      getActivityTimeline: (taskId: number, options?: { limit?: number; offset?: number }) => Promise<ActivityTimelineItem[]>
       getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }) => Promise<TaskHistory[]>
       deleteHistory: (historyId: number) => Promise<boolean>
       updateHistory: (historyId: number, newValue: string) => Promise<boolean>
@@ -103,7 +106,7 @@ export const taskApi = {
     if (!api) throw new Error('electronAPI not available')
     return api.listTasks(filters)
   },
-  listWithHistory: async (filters?: { startDate?: string; endDate?: string }): Promise<TaskWithHistory[]> => {
+  listWithHistory: async (filters?: { startDate?: string; endDate?: string; dateFilterMode?: string }): Promise<TaskWithHistory[]> => {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.listTasksWithHistory(filters)
@@ -117,6 +120,21 @@ export const taskApi = {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.getEarliestTaskDate()
+  },
+  listSubtasks: async (parentId: number): Promise<Task[]> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.listSubtasks(parentId)
+  },
+  getSubtaskCounts: async (taskId: number): Promise<SubtaskCounts> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getSubtaskCounts(taskId)
+  },
+  getActivityTimeline: async (taskId: number, options?: { limit?: number; offset?: number }): Promise<ActivityTimelineItem[]> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getActivityTimeline(taskId, options)
   },
   getHistory: async (id: number, options?: { limit?: number; offset?: number }): Promise<TaskHistory[]> => {
     const api = getElectronAPI()

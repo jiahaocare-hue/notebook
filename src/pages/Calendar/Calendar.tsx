@@ -11,7 +11,7 @@ const statusColors: Record<string, string> = {
   pending: 'bg-blue-500',
   in_progress: 'bg-amber-500',
   completed: 'bg-emerald-500',
-  cancelled: 'bg-gray-400',
+  cancelled: 'bg-gray-400 dark:bg-gray-500',
 }
 
 const CalendarPage: React.FC = () => {
@@ -199,10 +199,10 @@ const CalendarPage: React.FC = () => {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between p-6 border-b border-gray-100">
+      <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">日历视图</h1>
-          <p className="text-sm text-gray-500 mt-1">在日历上查看任务分布</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">日历视图</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">在日历上查看任务分布</p>
         </div>
         <button
           onClick={handleCreateTask}
@@ -217,19 +217,19 @@ const CalendarPage: React.FC = () => {
 
       <div className="flex-1 flex gap-6 p-6 overflow-hidden">
         <div className="flex-shrink-0">
-          <div className="bg-white rounded-2xl shadow-lg p-5 w-80 border border-gray-100">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-5 w-80 border border-gray-100 dark:border-gray-700">
             <div className="flex items-center justify-between mb-5">
-              <button onClick={prevMonth} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
-                <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <button onClick={prevMonth} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors">
+                <svg className="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
               <div className="text-center">
-                <span className="text-xl font-bold text-gray-800">{monthNames[currentMonth]}</span>
-                <span className="text-sm text-gray-400 ml-1">{currentYear}年</span>
+                <span className="text-xl font-bold text-gray-800 dark:text-gray-100">{monthNames[currentMonth]}</span>
+                <span className="text-sm text-gray-400 dark:text-gray-500 ml-1">{currentYear}年</span>
               </div>
-              <button onClick={nextMonth} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
-                <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <button onClick={nextMonth} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors">
+                <svg className="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
               </button>
@@ -237,7 +237,7 @@ const CalendarPage: React.FC = () => {
 
             <div className="grid grid-cols-7 gap-1 mb-2">
               {weekDays.map((day, i) => (
-                <div key={day} className={`text-center text-xs font-medium py-2 ${i === 0 || i === 6 ? 'text-red-400' : 'text-gray-400'}`}>
+                <div key={day} className={`text-center text-xs font-medium py-2 ${i === 0 || i === 6 ? 'text-red-400 dark:text-red-400' : 'text-gray-400 dark:text-gray-500'}`}>
                   {day}
                 </div>
               ))}
@@ -263,10 +263,10 @@ const CalendarPage: React.FC = () => {
                       selected
                         ? 'bg-blue-500 text-white'
                         : today
-                        ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-300'
+                        ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-300 dark:bg-blue-900/30 dark:text-blue-400 dark:ring-blue-700'
                         : isWeekend
-                        ? 'text-red-400 hover:bg-gray-50'
-                        : 'text-gray-700 hover:bg-gray-50'
+                        ? 'text-red-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+                        : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700'
                     }`}
                   >
                     {day}
@@ -285,25 +285,25 @@ const CalendarPage: React.FC = () => {
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 h-full flex flex-col">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 h-full flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-900">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                 {selectedDate ? formattedSelectedDate : '请选择日期'}
               </h2>
               {selectedDate && (
-                <span className="text-sm text-gray-500">{selectedDateTasks.length} 个任务</span>
+                <span className="text-sm text-gray-500 dark:text-gray-400">{selectedDateTasks.length} 个任务</span>
               )}
             </div>
 
             <div className="flex-1 overflow-auto">
               {loading ? (
-                <div className="text-center py-8 text-gray-400">加载中...</div>
+                <div className="text-center py-8 text-gray-400 dark:text-gray-500">加载中...</div>
               ) : selectedDateTasks.length === 0 ? (
                 <div className="text-center py-8">
-                  <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                   </svg>
-                  <p className="text-gray-500 mb-3">该日期没有任务</p>
+                  <p className="text-gray-500 dark:text-gray-400 mb-3">该日期没有任务</p>
                   <button onClick={handleCreateTask} className="text-blue-500 hover:text-blue-600 font-medium text-sm">
                     添加任务
                   </button>

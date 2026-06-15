@@ -12,9 +12,13 @@ interface OCRLog {
   timestamp: string
 }
 
+type ThemeMode = 'light' | 'dark' | 'system'
+
 interface SettingsModalProps {
   isOpen: boolean
   onClose: () => void
+  themeMode: ThemeMode
+  onThemeChange: (mode: ThemeMode) => void
 }
 
 const DEFAULT_PROMPT_TEMPLATE = `你是一个任务管理助手，请根据以下任务数据生成一份结构清晰、内容详实的总结报告。
@@ -73,7 +77,7 @@ const DEFAULT_PROMPT_TEMPLATE = `你是一个任务管理助手，请根据以�
 
 报告应采用正式、专业的文档格式，内容准确、条理清晰，便于阅读和理解。请用中文回复。`
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, themeMode, onThemeChange }) => {
   const [dataDir, setDataDir] = useState<string>('')
   const [customDataDir, setCustomDataDir] = useState<string | null>(null)
   const [llmApiKey, setLlmApiKey] = useState<string>('')
@@ -196,13 +200,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
       ) : (
         <div className="space-y-6 max-h-[70vh] overflow-y-auto">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               关于
             </label>
-            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+            <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
               <div>
-                <p className="text-sm text-gray-700">任务管理器</p>
-                <p className="text-xs text-gray-500">版本 {appVersion}</p>
+                <p className="text-sm text-gray-700 dark:text-gray-300">任务管理器</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">版本 {appVersion}</p>
               </div>
               <button
                 onClick={handleCheckUpdate}
@@ -214,8 +218,37 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
             </div>
           </div>
 
+          {/* 深色模式设置 */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              主题模式
+            </label>
+            <div className="flex items-center gap-2">
+              {([
+                { value: 'light' as ThemeMode, label: '浅色' },
+                { value: 'dark' as ThemeMode, label: '深色' },
+                { value: 'system' as ThemeMode, label: '跟随系统' },
+              ]).map(({ value, label }) => (
+                <button
+                  key={value}
+                  onClick={() => onThemeChange(value)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                    themeMode === value
+                      ? 'bg-blue-500 text-white shadow-md'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              选择应用的显示主题。选择"跟随系统"将自动根据系统设置切换。
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               数据存储目录
             </label>
             <div className="flex items-center gap-2">
@@ -223,11 +256,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                 type="text"
                 value={customDataDir || dataDir}
                 readOnly
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 text-sm"
+                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/50 text-gray-600 dark:text-gray-400 text-sm"
               />
               <button
                 onClick={handleBrowse}
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm whitespace-nowrap"
+                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors text-sm whitespace-nowrap"
               >
                 浏览...
               </button>
@@ -240,17 +273,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                 恢复默认目录
               </button>
             )}
-            <p className="mt-2 text-xs text-gray-500">
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
               数据库和图片将存储在此目录中。修改后需要重启应用才能生效。
             </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               调试日志
             </label>
             <div className="flex items-center gap-2">
-              <p className="text-sm text-gray-600 flex-1">
+              <p className="text-sm text-gray-600 dark:text-gray-400 flex-1">
                 日志文件存储在用户数据目录中
               </p>
               <button
@@ -261,23 +294,23 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                     console.error('Failed to open log folder:', error)
                   }
                 }}
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm whitespace-nowrap"
+                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors text-sm whitespace-nowrap"
               >
                 打开日志文件夹
               </button>
             </div>
-            <p className="mt-2 text-xs text-gray-500">
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
               日志文件可用于调试问题。如果遇到问题，可以查看日志文件获取详细信息。
             </p>
           </div>
 
-          <div className="border-t border-gray-200 pt-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+          <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               LLM 配置
             </label>
             <div className="space-y-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                   API Key
                 </label>
                 <input
@@ -285,11 +318,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                   value={llmApiKey}
                   onChange={(e) => setLlmApiKey(e.target.value)}
                   placeholder="输入 API Key"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                   Base URL
                 </label>
                 <input
@@ -297,11 +330,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                   value={llmBaseUrl}
                   onChange={(e) => setLlmBaseUrl(e.target.value)}
                   placeholder="输入 Base URL（可选）"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                   Model
                 </label>
                 <input
@@ -309,11 +342,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                   value={llmModel}
                   onChange={(e) => setLlmModel(e.target.value)}
                   placeholder="gpt-3.5-turbo"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                   请求超时时间（秒）
                 </label>
                 <input
@@ -322,7 +355,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                   onChange={(e) => setLlmTimeout(parseInt(e.target.value) || 30)}
                   min={1}
                   max={300}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <div className="flex items-center gap-2">
@@ -333,13 +366,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                   onChange={(e) => setLlmVerifySSL(e.target.checked)}
                   className="w-4 h-4 text-blue-500 rounded focus:ring-2 focus:ring-blue-500"
                 />
-                <label htmlFor="verifySSL" className="text-sm text-gray-700">
+                <label htmlFor="verifySSL" className="text-sm text-gray-700 dark:text-gray-300">
                   启用 SSL 证书验证
                 </label>
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="block text-xs text-gray-500">
+                  <label className="block text-xs text-gray-500 dark:text-gray-400">
                     提示词模板
                   </label>
                   <button
@@ -353,21 +386,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                   value={llmPromptTemplate}
                   onChange={(e) => setLlmPromptTemplate(e.target.value)}
                   rows={12}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                 />
-                <p className="mt-1 text-xs text-gray-400">
+                <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
                   可用变量: {`{{timeRange}}, {{total}}, {{completed}}, {{inProgress}}, {{pending}}, {{cancelled}}, {{completionRate}}, {{avgCompletionTime}}, {{priorityDistribution}}, {{monthlyDistribution}}, {{completedTasksList}}, {{inProgressTasksList}}, {{pendingTasksList}}`}
                 </p>
               </div>
             </div>
-            <p className="mt-2 text-xs text-gray-500">
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
               配置 LLM 服务提供商的 API Key、Base URL、Model 和 HTTP 客户端选项。
             </p>
           </div>
 
-          <div className="border-t border-gray-200 pt-6">
+          <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
             <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-gray-700">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 OCR 执行日志
               </label>
               <button
@@ -378,37 +411,37 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                 刷新
               </button>
             </div>
-            <div className="bg-gray-50 rounded-lg p-3 max-h-60 overflow-y-auto">
+            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3 max-h-60 overflow-y-auto">
               {ocrLogsLoading ? (
                 <div className="flex items-center justify-center py-4">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
                 </div>
               ) : ocrLogs.length === 0 ? (
-                <p className="text-sm text-gray-500 text-center py-4">暂无 OCR 日志</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">暂无 OCR 日志</p>
               ) : (
                 <div className="space-y-2">
                   {ocrLogs.map((log) => (
-                    <div key={log.id} className="flex items-start gap-2 text-xs border-b border-gray-200 pb-2 last:border-0">
+                    <div key={log.id} className="flex items-start gap-2 text-xs border-b border-gray-200 dark:border-gray-700 pb-2 last:border-0">
                       <span className={`px-1.5 py-0.5 rounded ${
                         log.status === 'success' 
-                          ? 'bg-green-50 text-green-600' 
-                          : 'bg-red-50 text-red-600'
+                          ? 'bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400' 
+                          : 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400'
                       }`}>
                         {log.status === 'success' ? '成功' : '失败'}
                       </span>
                       <div className="flex-1 min-w-0">
                         {log.image_path && (
-                          <p className="text-gray-600 truncate" title={log.image_path}>
+                          <p className="text-gray-600 dark:text-gray-400 truncate" title={log.image_path}>
                             图片: {log.image_path}
                           </p>
                         )}
                         {log.message && (
-                          <p className="text-gray-500">{log.message}</p>
+                          <p className="text-gray-500 dark:text-gray-400">{log.message}</p>
                         )}
                         {log.error && (
-                          <p className="text-red-500">{log.error}</p>
+                          <p className="text-red-500 dark:text-red-400">{log.error}</p>
                         )}
-                        <p className="text-gray-400">
+                        <p className="text-gray-400 dark:text-gray-500">
                           {new Date(log.timestamp).toLocaleString('zh-CN')}
                         </p>
                       </div>
@@ -417,7 +450,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                 </div>
               )}
             </div>
-            <p className="mt-2 text-xs text-gray-500">
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
               显示最近 20 条 OCR 执行记录。如果日志显示成功但搜索无结果，可能是图片中没有可识别的文字。
             </p>
           </div>
@@ -426,18 +459,18 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
             <div
               className={`px-4 py-2 rounded-lg text-sm ${
                 message.type === 'success'
-                  ? 'bg-green-50 text-green-700'
-                  : 'bg-red-50 text-red-700'
+                  ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400'
+                  : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'
               }`}
             >
               {message.text}
             </div>
           )}
 
-          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
             >
               取消
             </button>

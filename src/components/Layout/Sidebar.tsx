@@ -58,11 +58,11 @@ const SummaryIcon = () => (
 )
 
 const statusColors = {
-  all: { bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400', activeBg: 'bg-slate-200' },
-  pending: { bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-400', activeBg: 'bg-amber-100' },
-  in_progress: { bg: 'bg-blue-50', text: 'text-blue-700', dot: 'bg-blue-500', activeBg: 'bg-blue-100' },
-  completed: { bg: 'bg-emerald-50', text: 'text-emerald-700', dot: 'bg-emerald-500', activeBg: 'bg-emerald-100' },
-  cancelled: { bg: 'bg-red-50', text: 'text-red-700', dot: 'bg-red-500', activeBg: 'bg-red-100' },
+  all: { bg: 'bg-slate-100 dark:bg-gray-700', text: 'text-slate-600 dark:text-gray-300', dot: 'bg-slate-400 dark:bg-gray-500', activeBg: 'bg-slate-200 dark:bg-gray-600' },
+  pending: { bg: 'bg-amber-50 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-300', dot: 'bg-amber-400 dark:bg-amber-500', activeBg: 'bg-amber-100 dark:bg-amber-800/30' },
+  in_progress: { bg: 'bg-blue-50 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-300', dot: 'bg-blue-500', activeBg: 'bg-blue-100 dark:bg-blue-800/30' },
+  completed: { bg: 'bg-emerald-50 dark:bg-emerald-900/30', text: 'text-emerald-700 dark:text-emerald-300', dot: 'bg-emerald-500', activeBg: 'bg-emerald-100 dark:bg-emerald-800/30' },
+  cancelled: { bg: 'bg-red-50 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-300', dot: 'bg-red-500', activeBg: 'bg-red-100 dark:bg-red-800/30' },
 }
 
 const Sidebar: React.FC<SidebarProps> = memo(({
@@ -97,9 +97,9 @@ const Sidebar: React.FC<SidebarProps> = memo(({
   ]
 
   return (
-    <aside className="w-72 bg-gradient-to-b from-slate-50 to-slate-100 h-full p-5 flex flex-col border-r border-slate-200/60 shadow-sm">
+    <aside className="w-72 bg-gradient-to-b from-slate-50 to-slate-100 dark:from-gray-800 dark:to-gray-900 h-full p-5 flex flex-col border-r border-slate-200/60 dark:border-gray-700/60 shadow-sm">
       <div className="mb-8 flex-shrink-0">
-        <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+        <h1 className="text-xl font-bold text-slate-800 dark:text-gray-100 flex items-center gap-2">
           <span className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 11l3 3L22 4" />
@@ -120,8 +120,8 @@ const Sidebar: React.FC<SidebarProps> = memo(({
               onClick={() => onNavChange(item.id)}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ease-out group ${
                 isActive
-                  ? 'bg-white text-blue-600 shadow-md shadow-blue-500/10 border border-blue-100'
-                  : 'text-slate-600 hover:bg-white/60 hover:shadow-sm hover:text-slate-800'
+                  ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-md shadow-blue-500/10 dark:shadow-blue-900/30 border border-blue-100 dark:border-blue-900/50'
+                  : 'text-slate-600 dark:text-gray-400 hover:bg-white/60 hover:shadow-sm hover:text-slate-800 dark:hover:text-gray-200'
               }`}
             >
               <span className={`transition-transform duration-200 ${isActive ? 'scale-110' : 'group-hover:scale-105'}`}>
@@ -136,7 +136,7 @@ const Sidebar: React.FC<SidebarProps> = memo(({
         })}
       </nav>
 
-      <div className="bg-white/60 backdrop-blur-sm rounded-2xl p-4 border border-slate-200/60 shadow-sm overflow-y-auto flex-1">
+      <div className="bg-white/60 dark:bg-gray-800/60 backdrop-blur-sm rounded-2xl p-4 border border-slate-200/60 dark:border-gray-700/60 shadow-sm overflow-y-auto flex-1">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
             时间范围
@@ -152,7 +152,7 @@ const Sidebar: React.FC<SidebarProps> = memo(({
                 className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 ${
                   isActive
                     ? 'bg-blue-500 text-white shadow-md shadow-blue-500/25'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    : 'bg-slate-100 dark:bg-gray-700 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-600'
                 }`}
               >
                 {item.label}
@@ -161,8 +161,8 @@ const Sidebar: React.FC<SidebarProps> = memo(({
           })}
         </div>
 
-        <div className="border-t border-slate-200/60 pt-4">
-          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+        <div className="border-t border-slate-200/60 dark:border-gray-700/60 pt-4">
+          <h3 className="text-xs font-semibold text-slate-400 dark:text-gray-500 uppercase tracking-wider mb-3">
             状态筛选
           </h3>
           <div className="flex flex-wrap gap-2">
@@ -184,7 +184,7 @@ const Sidebar: React.FC<SidebarProps> = memo(({
                   <span className={`w-2 h-2 rounded-full ${colors.dot} ${isActive ? 'animate-pulse' : ''}`} />
                   <span>{item.label}</span>
                   <span className={`ml-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
-                    isActive ? 'bg-white/50' : 'bg-white/70'
+                    isActive ? 'bg-white/50 dark:bg-gray-600/50' : 'bg-white/70 dark:bg-gray-600/70'
                   }`}>
                     {count}
                   </span>
@@ -196,7 +196,7 @@ const Sidebar: React.FC<SidebarProps> = memo(({
       </div>
 
       <div className="mt-auto pt-6 flex-shrink-0">
-        <div className="bg-gradient-to-r from-blue-500/10 to-indigo-500/10 rounded-xl p-4 border border-blue-200/30">
+        <div className="bg-gradient-to-r from-blue-500/10 to-indigo-500/10 dark:from-blue-500/20 dark:to-indigo-500/20 rounded-xl p-4 border border-blue-200/30 dark:border-blue-800/30">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -204,8 +204,8 @@ const Sidebar: React.FC<SidebarProps> = memo(({
               </svg>
             </div>
             <div>
-              <p className="text-xs text-slate-500">总任务数</p>
-              <p className="text-lg font-bold text-slate-800">{totalTaskCounts.all}</p>
+              <p className="text-xs text-slate-500 dark:text-gray-400">总任务数</p>
+              <p className="text-lg font-bold text-slate-800 dark:text-gray-100">{totalTaskCounts.all}</p>
             </div>
           </div>
         </div>

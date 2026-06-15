@@ -43,7 +43,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({
   totalTaskCounts,
 }) => {
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col">
       <Header onSearch={onSearch} onSettings={onSettings} />
       <div className="flex flex-1">
         <Sidebar
@@ -56,7 +56,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({
           taskCounts={taskCounts}
           totalTaskCounts={totalTaskCounts}
         />
-        <main className="flex-1 p-6 overflow-auto">
+        <main className="flex-1 p-6 overflow-auto dark:bg-gray-900">
           {children}
         </main>
       </div>

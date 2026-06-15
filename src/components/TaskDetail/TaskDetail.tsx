@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { Task, TaskHistory } from '../../types'
+import { Task, TaskHistory, ActivityTimelineItem, SubtaskCounts, NewTask } from '../../types'
 import { imageApi, taskApi, clipboardApi, ocrApi } from '../../ipc/tasks'
 import { DatePicker } from '../DatePicker'
 import ImageViewer from '../ImageViewer'
 import { ConfirmDialog } from '../ConfirmDialog'
+import Modal from '../Modal'
+import TaskForm from '../TaskForm'
 
 interface OcrProgress {
   status: string
@@ -16,11 +18,11 @@ const OcrProgressBar = React.memo<{ progress: OcrProgress | null; showComplete: 
   
   return (
     <div className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-all duration-300 ${
-      progress?.status === 'downloading' || progress?.status === 'recognizing' 
-        ? 'bg-blue-50 text-blue-700' 
+      progress?.status === 'downloading' || progress?.status === 'recognizing'
+        ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
         : showComplete
-          ? 'bg-green-50 text-green-600'
-          : 'bg-red-50 text-red-600'
+          ? 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400'
+          : 'bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400'
     }`}>
       {progress?.status === 'downloading' || progress?.status === 'recognizing' ? (
         <>
@@ -52,6 +54,7 @@ interface TaskDetailProps {
   task: Task
   onDelete: (id: number) => void
   onUpdate: (task: Task) => void
+  onNavigateToTask?: (taskId: number) => void
 }
 
 function insertImageIntoDescription(
@@ -93,6 +96,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   task,
   onDelete,
   onUpdate,
+  onNavigateToTask,
 }) => {
   const [newContent, setNewContent] = useState('')
   const [previewImage, setPreviewImage] = useState<string | null>(null)
@@ -109,14 +113,30 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   }, [task])
   
   const [history, setHistory] = useState<TaskHistory[]>([])
-  const [historyLoading, setHistoryLoading] = useState(false)
-  const [historyError, setHistoryError] = useState<string | null>(null)
-  const [hasMoreHistory, setHasMoreHistory] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
+  const [_historyLoading, setHistoryLoading] = useState(false)
+  const [_historyError, setHistoryError] = useState<string | null>(null)
+  const [_hasMoreHistory, setHasMoreHistory] = useState(false)
+  const [_loadingMore, setLoadingMore] = useState(false)
   const HISTORY_PAGE_SIZE = 20
   const [editingHistoryId, setEditingHistoryId] = useState<number | null>(null)
   const [editingHistoryContent, setEditingHistoryContent] = useState('')
   const [deleteHistoryId, setDeleteHistoryId] = useState<number | null>(null)
+
+  // 子任务相关状态
+  const [subtasks, setSubtasks] = useState<Task[]>([])
+  const [subtaskCounts, setSubtaskCounts] = useState<SubtaskCounts>({ total: 0, completed: 0 })
+  const [subtaskLoading, setSubtaskLoading] = useState(false)
+  const [hoveredSubtaskId, setHoveredSubtaskId] = useState<number | null>(null)
+  const [showSubtaskDetail, setShowSubtaskDetail] = useState(false)
+  const [selectedSubtask, setSelectedSubtask] = useState<Task | null>(null)
+  const [showNewSubtaskForm, setShowNewSubtaskForm] = useState(false)
+  const [deleteSubtaskId, setDeleteSubtaskId] = useState<number | null>(null)
+
+  // 活动时间线相关状态
+  const [activityTimeline, setActivityTimeline] = useState<ActivityTimelineItem[]>([])
+  const [timelineLoading, setTimelineLoading] = useState(false)
+  const [hasMoreTimeline, setHasMoreTimeline] = useState(false)
+  const [loadingMoreTimeline, setLoadingMoreTimeline] = useState(false)
 
   useEffect(() => {
     if (window.electronAPI?.onOcrProgress) {
@@ -231,15 +251,60 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     }
   }, [task.id])
 
-  const loadMoreHistory = useCallback(() => {
-    if (!loadingMore && hasMoreHistory) {
-      loadHistory(history.length, true)
-    }
-  }, [loadingMore, hasMoreHistory, loadHistory, history.length])
-
   useEffect(() => {
     loadHistory()
   }, [task.id, task.updated_at, loadHistory])
+
+  const loadSubtasks = useCallback(async () => {
+    setSubtaskLoading(true)
+    try {
+      const [subtaskList, counts] = await Promise.all([
+        taskApi.listSubtasks(task.id),
+        taskApi.getSubtaskCounts(task.id)
+      ])
+      setSubtasks(subtaskList)
+      setSubtaskCounts(counts)
+    } catch (err) {
+      console.error('Failed to load subtasks:', err)
+    } finally {
+      setSubtaskLoading(false)
+    }
+  }, [task.id])
+
+  const loadActivityTimeline = useCallback(async (offset: number = 0, append: boolean = false) => {
+    if (append) {
+      setLoadingMoreTimeline(true)
+    } else {
+      setTimelineLoading(true)
+    }
+    try {
+      const data = await taskApi.getActivityTimeline(task.id, { limit: 21, offset })
+      if (data.length > 20) {
+        setHasMoreTimeline(true)
+        data.pop()
+      } else {
+        setHasMoreTimeline(false)
+      }
+      if (append) {
+        setActivityTimeline(prev => [...prev, ...data])
+      } else {
+        setActivityTimeline(data)
+      }
+    } catch (err) {
+      console.error('Failed to load activity timeline:', err)
+    } finally {
+      setTimelineLoading(false)
+      setLoadingMoreTimeline(false)
+    }
+  }, [task.id])
+
+  useEffect(() => {
+    loadSubtasks()
+  }, [task.id, task.updated_at, loadSubtasks])
+
+  useEffect(() => {
+    loadActivityTimeline()
+  }, [task.id, task.updated_at, loadActivityTimeline])
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString + 'Z')
@@ -255,19 +320,19 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
 
   const getPriorityColor = (priority: Task['priority']) => {
     const colors = {
-      high: 'text-red-600 bg-red-50',
-      medium: 'text-yellow-600 bg-yellow-50',
-      low: 'text-green-600 bg-green-50',
+      high: 'text-red-600 bg-red-50 dark:text-red-400 dark:bg-red-900/30',
+      medium: 'text-yellow-600 bg-yellow-50 dark:text-yellow-400 dark:bg-yellow-900/30',
+      low: 'text-green-600 bg-green-50 dark:text-green-400 dark:bg-green-900/30',
     }
     return colors[priority]
   }
 
   const getStatusColor = (status: Task['status']) => {
     const colors = {
-      pending: 'text-gray-600 bg-gray-100',
-      in_progress: 'text-blue-600 bg-blue-100',
-      completed: 'text-green-600 bg-green-100',
-      cancelled: 'text-red-600 bg-red-100',
+      pending: 'text-gray-600 bg-gray-100 dark:text-gray-400 dark:bg-gray-700',
+      in_progress: 'text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-900/30',
+      completed: 'text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-900/30',
+      cancelled: 'text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-900/30',
     }
     return colors[status]
   }
@@ -305,6 +370,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     await onUpdate(updatedTask)
     setNewContent('')
     loadHistory()
+    loadActivityTimeline()
   }
 
   const handleDeleteHistory = async (historyId: number) => {
@@ -316,6 +382,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     try {
       await taskApi.deleteHistory(deleteHistoryId)
       loadHistory()
+      loadActivityTimeline()
     } catch (err) {
       console.error('Failed to delete history:', err)
     } finally {
@@ -359,6 +426,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
       setEditingHistoryId(null)
       setEditingHistoryContent('')
       loadHistory()
+      loadActivityTimeline()
     } catch (err) {
       console.error('Failed to update history:', err)
     }
@@ -367,6 +435,88 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
   const handleCancelEditHistory = () => {
     setEditingHistoryId(null)
     setEditingHistoryContent('')
+  }
+
+  const handleSubtaskStatusToggle = async (subtask: Task) => {
+    const newStatus = subtask.status === 'completed' ? 'in_progress' : 'completed'
+    try {
+      await taskApi.update(subtask.id, { status: newStatus })
+      loadSubtasks()
+      loadActivityTimeline()
+      // 通知父组件刷新（触发 TaskCard 子任务进度更新）
+      onUpdate(task)
+    } catch (err) {
+      console.error('Failed to toggle subtask status:', err)
+    }
+  }
+
+  const handleSubtaskClick = async (subtaskId: number) => {
+    try {
+      const subtask = await taskApi.get(subtaskId)
+      if (subtask) {
+        setSelectedSubtask(subtask)
+        setShowSubtaskDetail(true)
+      }
+    } catch (err) {
+      console.error('Failed to load subtask detail:', err)
+    }
+  }
+
+  const handleDeleteSubtask = async () => {
+    if (deleteSubtaskId === null) return
+    try {
+      await taskApi.delete(deleteSubtaskId)
+      setDeleteSubtaskId(null)
+      loadSubtasks()
+      loadActivityTimeline()
+      onUpdate(task)
+    } catch (err) {
+      console.error('Failed to delete subtask:', err)
+    }
+  }
+
+  const handleCreateSubtask = async (data: NewTask | any) => {
+    try {
+      await taskApi.create({ ...data, parent_id: task.id })
+      setShowNewSubtaskForm(false)
+      loadSubtasks()
+      loadActivityTimeline()
+      onUpdate(task)
+    } catch (err) {
+      console.error('Failed to create subtask:', err)
+    }
+  }
+
+  const handleSubtaskUpdate = async (updatedSubtask: Task) => {
+    try {
+      await taskApi.update(updatedSubtask.id, {
+        title: updatedSubtask.title,
+        description: updatedSubtask.description ?? undefined,
+        status: updatedSubtask.status,
+        priority: updatedSubtask.priority,
+        due_date: updatedSubtask.due_date ?? undefined,
+      })
+      const latestSubtask = await taskApi.get(updatedSubtask.id)
+      if (latestSubtask) {
+        setSelectedSubtask(latestSubtask)
+      }
+      loadSubtasks()
+      loadActivityTimeline()
+    } catch (err) {
+      console.error('Failed to update subtask:', err)
+    }
+  }
+
+  const handleSubtaskDelete = async (id: number) => {
+    try {
+      await taskApi.delete(id)
+      setShowSubtaskDetail(false)
+      setSelectedSubtask(null)
+      loadSubtasks()
+      loadActivityTimeline()
+    } catch (err) {
+      console.error('Failed to delete subtask:', err)
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -436,7 +586,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
     <div className="space-y-6">
       <div className="flex items-start">
         <div className="flex-1">
-          <h2 className="text-xl font-bold text-gray-900 mb-2">{task.title}</h2>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-2">{task.title}</h2>
           <select
             value={task.status}
             onChange={(e) => handleStatusChange(e.target.value as Task['status'])}
@@ -452,7 +602,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <h3 className="text-sm font-medium text-gray-500 mb-1">优先级</h3>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">优先级</h3>
           <select
             value={task.priority}
             onChange={(e) => handlePriorityChange(e.target.value as Task['priority'])}
@@ -464,7 +614,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
           </select>
         </div>
         <div>
-          <h3 className="text-sm font-medium text-gray-500 mb-1">截止日期</h3>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">截止日期</h3>
           <DatePicker
             value={task.due_date || ''}
             onChange={handleDueDateChange}
@@ -476,24 +626,123 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
 
       <div className="grid grid-cols-2 gap-4 text-sm">
         <div>
-          <h3 className="text-sm font-medium text-gray-500 mb-1">创建时间</h3>
-          <p className="text-gray-700">{formatDate(task.created_at)}</p>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">创建时间</h3>
+          <p className="text-gray-700 dark:text-gray-300">{formatDate(task.created_at)}</p>
         </div>
         <div>
-          <h3 className="text-sm font-medium text-gray-500 mb-1">更新时间</h3>
-          <p className="text-gray-700">{formatDate(task.updated_at)}</p>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">更新时间</h3>
+          <p className="text-gray-700 dark:text-gray-300">{formatDate(task.updated_at)}</p>
         </div>
       </div>
 
       {task.description && (
         <div>
-          <h3 className="text-sm font-medium text-gray-500 mb-1">描述</h3>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">描述</h3>
           <TaskDescription description={task.description} onImageClick={setPreviewImage} taskId={task.id} />
         </div>
       )}
 
+      {/* 子任务区域 */}
       <div>
-        <h3 className="text-sm font-medium text-gray-500 mb-3">更新历史</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
+            子任务 {subtaskCounts.total > 0 && `(${subtaskCounts.completed}/${subtaskCounts.total})`}
+          </h3>
+        </div>
+        
+        {subtaskCounts.total > 0 && (
+          <div className="mb-3">
+            <div className="h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-blue-500 rounded-full transition-all duration-300" 
+                style={{ width: `${(subtaskCounts.completed / subtaskCounts.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+        
+        {subtaskLoading ? (
+          <div className="flex items-center justify-center py-4">
+            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
+          </div>
+        ) : subtasks.length > 0 ? (
+          <div className="space-y-2 mb-3">
+            {subtasks.map(subtask => (
+              <div
+                key={subtask.id}
+                className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors group cursor-pointer"
+                onMouseEnter={() => setHoveredSubtaskId(subtask.id)}
+                onMouseLeave={() => setHoveredSubtaskId(null)}
+              >
+                <input
+                  type="checkbox"
+                  checked={subtask.status === 'completed'}
+                  onChange={(e) => {
+                    e.stopPropagation()
+                    handleSubtaskStatusToggle(subtask)
+                  }}
+                  className="w-4 h-4 rounded border-gray-300 text-blue-500 focus:ring-blue-500 cursor-pointer"
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <div 
+                  className="flex-1 min-w-0"
+                  onClick={() => handleSubtaskClick(subtask.id)}
+                >
+                  <p className={`text-sm font-medium truncate ${subtask.status === 'completed' ? 'line-through text-gray-400 dark:text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
+                    {subtask.title}
+                  </p>
+                  {subtask.description && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 truncate mt-0.5">
+                      {subtask.description.replace(/!\[.*?\]\(.*?\)/g, '').trim().substring(0, 60)}
+                    </p>
+                  )}
+                </div>
+                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                  subtask.status === 'completed' ? 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400' :
+                  subtask.status === 'in_progress' ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400' :
+                  subtask.status === 'pending' ? 'bg-yellow-50 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400' :
+                  'bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+                }`}>
+                  {subtask.status === 'completed' ? '已完成' : subtask.status === 'in_progress' ? '进行中' : subtask.status === 'pending' ? '待处理' : '已取消'}
+                </span>
+                
+                {hoveredSubtaskId === subtask.id && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleSubtaskStatusToggle(subtask) }}
+                      className="px-2 py-1 text-xs text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/30 rounded hover:bg-blue-100 dark:hover:bg-blue-900/50"
+                    >
+                      {subtask.status === 'completed' ? '重开' : '完成'}
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleSubtaskClick(subtask.id) }}
+                      className="px-2 py-1 text-xs text-gray-600 bg-gray-100 dark:text-gray-400 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDeleteSubtaskId(subtask.id) }}
+                      className="px-2 py-1 text-xs text-red-600 bg-red-50 dark:text-red-400 dark:bg-red-900/30 rounded hover:bg-red-100 dark:hover:bg-red-900/50"
+                    >
+                      删除
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        
+        <button
+          onClick={() => setShowNewSubtaskForm(true)}
+          className="w-full py-2 text-sm text-blue-500 hover:text-blue-600 border border-dashed border-gray-300 dark:border-gray-600 rounded-lg hover:border-blue-300 dark:hover:border-blue-600 transition-colors"
+        >
+          + 新建子任务
+        </button>
+      </div>
+
+      <div>
+        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">活动时间线</h3>
         
         <div className="mb-3">
           <div className="flex gap-2">
@@ -503,7 +752,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
               onKeyDown={handleKeyDown}
               placeholder="添加新的更新内容..."
               rows={3}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+              className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
               style={{ minHeight: '80px', maxHeight: '200px', overflowY: 'auto' }}
             />
             <input
@@ -515,7 +764,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="px-3 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+              className="px-3 py-2 text-gray-600 bg-gray-100 dark:text-gray-400 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
               title="插入图片"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -532,38 +781,29 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
             </button>
           </div>
           <div className="mt-1 flex items-center gap-2">
-            <span className="text-xs text-gray-400">提示：按 Ctrl+V 可直接粘贴图片</span>
+            <span className="text-xs text-gray-400 dark:text-gray-500">提示：按 Ctrl+V 可直接粘贴图片</span>
             {pasteStatus === 'success' && (
-              <span className="text-xs text-green-600">图片已粘贴</span>
+              <span className="text-xs text-green-600 dark:text-green-400">图片已粘贴</span>
             )}
             {pasteStatus === 'error' && (
-              <span className="text-xs text-red-600">粘贴失败</span>
+              <span className="text-xs text-red-600 dark:text-red-400">粘贴失败</span>
             )}
           </div>
         </div>
 
-        {historyLoading && (
+        {timelineLoading && (
           <div className="flex items-center justify-center py-4">
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
-            <span className="ml-2 text-sm text-gray-500">加载历史记录...</span>
+            <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">加载活动时间线...</span>
           </div>
         )}
 
-        {historyError && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center justify-between">
-            <span className="text-sm">{historyError}</span>
-            <button
-              onClick={() => loadHistory()}
-              className="text-red-600 hover:text-red-700 text-sm font-medium"
-            >
-              重试
-            </button>
-          </div>
-        )}
-
-        {!historyLoading && !historyError && history.length > 0 && (
+        {!timelineLoading && activityTimeline.length > 0 && (
           <div className="space-y-2">
-            {history.map((item) => {
+            {activityTimeline.map((item) => {
+              const isParentTask = item.source_parent_id === null || item.source_task_id === task.id
+              const isSubtaskCreated = item.action === 'created' && item.source_parent_id !== null && item.source_task_id !== task.id
+              
               let changeText = ''
               let addedImages: string[] = []
               
@@ -677,10 +917,31 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                 changeText = getActionLabel(item.action)
               }
               
+              let borderColor = ''
+              let icon = ''
+              let sourcePrefix = ''
+              
+              if (!isParentTask) {
+                if (isSubtaskCreated) {
+                  borderColor = 'border-l-2 border-l-green-400'
+                  icon = '➕'
+                  sourcePrefix = `创建子任务"${item.source_task_title}"`
+                  changeText = ''
+                } else if (item.action === 'status_changed') {
+                  borderColor = 'border-l-2 border-l-orange-400'
+                  icon = '🔄'
+                  sourcePrefix = `${item.source_task_title} ·`
+                } else {
+                  borderColor = 'border-l-2 border-l-blue-400'
+                  icon = '📋'
+                  sourcePrefix = `${item.source_task_title} ·`
+                }
+              }
+              
               return (
                 <div
                   key={item.id}
-                  className="flex items-start gap-3 text-sm py-2 border-b border-gray-100 last:border-0 group"
+                  className={`flex items-start gap-3 text-sm py-2 border-b border-gray-100 dark:border-gray-700 last:border-0 group ${borderColor} pl-2`}
                 >
                   <div className="w-2 h-2 mt-1.5 rounded-full bg-blue-400 flex-shrink-0" />
                   <div className="flex-1">
@@ -690,7 +951,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                           value={editingHistoryContent}
                           onChange={(e) => setEditingHistoryContent(e.target.value)}
                           rows={3}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
                         />
                         <div className="flex gap-2">
                           <button
@@ -701,7 +962,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); handleCancelEditHistory() }}
-                            className="px-3 py-1 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 text-xs"
+                            className="px-3 py-1 bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-xs"
                           >
                             取消
                           </button>
@@ -709,25 +970,33 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                       </div>
                     ) : (
                       <>
-                        <p className="text-gray-700 whitespace-pre-line">{changeText}</p>
+                        {sourcePrefix && (
+                          <span 
+                            className="text-xs font-medium text-blue-500 hover:text-blue-600 cursor-pointer"
+                            onClick={() => item.source_task_id !== task.id && handleSubtaskClick(item.source_task_id)}
+                          >
+                            {icon} {sourcePrefix}{' '}
+                          </span>
+                        )}
+                        <p className="text-gray-700 dark:text-gray-300 whitespace-pre-line">{changeText}</p>
                         {addedImages.length > 0 && (
                           <HistoryImages addedImages={addedImages} onImageClick={setPreviewImage} taskId={task.id} />
                         )}
                       </>
                     )}
                     <div className="flex items-center gap-2 mt-0.5">
-                      <p className="text-gray-400 text-xs">{formatDate(item.timestamp)}</p>
+                      <p className="text-gray-400 dark:text-gray-500 text-xs">{formatDate(item.timestamp)}</p>
                       {editingHistoryId !== item.id && (
                         <div className="hidden group-hover:flex items-center gap-1">
                           <button
-                            onClick={() => handleStartEditHistory(item)}
-                            className="text-gray-400 hover:text-blue-500 text-xs"
+                            onClick={() => handleStartEditHistory(item as unknown as TaskHistory)}
+                            className="text-gray-400 dark:text-gray-500 hover:text-blue-500 text-xs"
                           >
                             编辑
                           </button>
                           <button
                             onClick={() => handleDeleteHistory(item.id)}
-                            className="text-gray-400 hover:text-red-500 text-xs"
+                            className="text-gray-400 dark:text-gray-500 hover:text-red-500 text-xs"
                           >
                             删除
                           </button>
@@ -738,23 +1007,23 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
                 </div>
               )
             })}
-            {hasMoreHistory && (
+            {hasMoreTimeline && (
               <button
-                onClick={loadMoreHistory}
-                disabled={loadingMore}
-                className="w-full py-2 text-sm text-blue-500 hover:text-blue-600 disabled:text-gray-400 transition-colors"
+                onClick={() => loadActivityTimeline(activityTimeline.length, true)}
+                disabled={loadingMoreTimeline}
+                className="w-full py-2 text-sm text-blue-500 hover:text-blue-600 disabled:text-gray-400 dark:disabled:text-gray-500 transition-colors"
               >
-                {loadingMore ? '加载中...' : '加载更多'}
+                {loadingMoreTimeline ? '加载中...' : '加载更多'}
               </button>
             )}
           </div>
         )}
       </div>
 
-      <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+      <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
         <button
           onClick={() => onDelete(task.id)}
-          className="px-4 py-2 text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+          className="px-4 py-2 text-red-600 bg-red-50 dark:text-red-400 dark:bg-red-900/30 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
         >
           删除
         </button>
@@ -781,6 +1050,72 @@ const TaskDetail: React.FC<TaskDetailProps> = ({
         cancelText="取消"
         onConfirm={confirmDeleteHistory}
         onCancel={() => setDeleteHistoryId(null)}
+        variant="danger"
+      />
+
+      {/* 子任务详情弹窗 */}
+      {showSubtaskDetail && selectedSubtask && (
+        <Modal
+          isOpen={showSubtaskDetail}
+          onClose={() => { setShowSubtaskDetail(false); setSelectedSubtask(null); loadSubtasks(); loadActivityTimeline(); }}
+          title="子任务详情"
+        >
+          {/* 面包屑导航 */}
+          <div className="flex items-center gap-2 mb-4 text-sm">
+            <button 
+              className="text-blue-500 hover:text-blue-600"
+              onClick={() => {
+                setShowSubtaskDetail(false)
+                setSelectedSubtask(null)
+                if (onNavigateToTask) {
+                  onNavigateToTask(task.id)
+                }
+              }}
+            >
+              {task.title}
+            </button>
+            <span className="text-gray-400">/</span>
+            <span className="text-gray-700 dark:text-gray-300">{selectedSubtask.title}</span>
+          </div>
+          <TaskDetail
+            task={selectedSubtask}
+            onDelete={handleSubtaskDelete}
+            onUpdate={handleSubtaskUpdate}
+            onNavigateToTask={(targetTaskId) => {
+              if (targetTaskId === task.id) {
+                setShowSubtaskDetail(false)
+                setSelectedSubtask(null)
+              } else {
+                handleSubtaskClick(targetTaskId)
+              }
+            }}
+          />
+        </Modal>
+      )}
+
+      {/* 新建子任务表单弹窗 */}
+      {showNewSubtaskForm && (
+        <Modal
+          isOpen={showNewSubtaskForm}
+          onClose={() => setShowNewSubtaskForm(false)}
+          title="新建子任务"
+        >
+          <TaskForm
+            onSubmit={handleCreateSubtask}
+            onCancel={() => setShowNewSubtaskForm(false)}
+          />
+        </Modal>
+      )}
+
+      {/* 删除子任务确认对话框 */}
+      <ConfirmDialog
+        isOpen={deleteSubtaskId !== null}
+        title="删除子任务"
+        message="确定要删除这个子任务吗？此操作无法撤销。"
+        confirmText="删除"
+        cancelText="取消"
+        onConfirm={handleDeleteSubtask}
+        onCancel={() => setDeleteSubtaskId(null)}
         variant="danger"
       />
     </div>
@@ -862,19 +1197,19 @@ const TaskDescription: React.FC<{ description: string; onImageClick: (url: strin
 
   const getOCRStatusBadge = (info: ImageOCRInfo | undefined) => {
     if (!info) {
-      return <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">待识别</span>
+      return <span className="text-xs text-gray-400 bg-gray-100 dark:text-gray-500 dark:bg-gray-700 px-1.5 py-0.5 rounded">待识别</span>
     }
     if (info.ocr_status === 'success') {
-      return <span className="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded">识别成功</span>
+      return <span className="text-xs text-green-600 bg-green-50 dark:text-green-400 dark:bg-green-900/30 px-1.5 py-0.5 rounded">识别成功</span>
     }
     if (info.ocr_status === 'failed') {
-      return <span className="text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded">识别失败</span>
+      return <span className="text-xs text-red-600 bg-red-50 dark:text-red-400 dark:bg-red-900/30 px-1.5 py-0.5 rounded">识别失败</span>
     }
-    return <span className="text-xs text-yellow-600 bg-yellow-50 px-1.5 py-0.5 rounded">识别中</span>
+    return <span className="text-xs text-yellow-600 bg-yellow-50 dark:text-yellow-400 dark:bg-yellow-900/30 px-1.5 py-0.5 rounded">识别中</span>
   }
 
   return (
-    <div className="text-sm text-gray-700">
+    <div className="text-sm text-gray-700 dark:text-gray-300">
       {textContent && <p className="whitespace-pre-wrap">{textContent}</p>}
       {loading && images.length === 0 && description.includes('![') && (
         <div className="flex gap-1 mt-2">
@@ -886,10 +1221,10 @@ const TaskDescription: React.FC<{ description: string; onImageClick: (url: strin
           {images.map((img, idx) => {
             const info = ocrInfo.get(img.path)
             return (
-              <div key={idx} className="border border-gray-200 rounded-lg p-2">
+              <div key={idx} className="border border-gray-200 dark:border-gray-700 rounded-lg p-2">
                 <div className="flex items-start gap-3">
                   {img.error ? (
-                    <div className="w-16 h-16 bg-red-50 rounded flex items-center justify-center flex-shrink-0">
+                    <div className="w-16 h-16 bg-red-50 dark:bg-red-900/20 rounded flex items-center justify-center flex-shrink-0">
                       <span className="text-red-400 text-xs">加载失败</span>
                     </div>
                   ) : (
@@ -907,23 +1242,23 @@ const TaskDescription: React.FC<{ description: string; onImageClick: (url: strin
                     <div className="flex items-center gap-2 mb-1">
                       {getOCRStatusBadge(info)}
                       {info && info.ocr_timestamp && (
-                        <span className="text-xs text-gray-400">
+                        <span className="text-xs text-gray-400 dark:text-gray-500">
                           {new Date(info.ocr_timestamp).toLocaleString('zh-CN')}
                         </span>
                       )}
                     </div>
                     {info && info.text_content && (
-                      <p className="text-xs text-gray-600 line-clamp-2 mb-1" title={info.text_content}>
+                      <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-2 mb-1" title={info.text_content}>
                         {info.text_content.substring(0, 100)}{info.text_content.length > 100 ? '...' : ''}
                       </p>
                     )}
                     {info && info.ocr_error && (
-                      <p className="text-xs text-red-500 mb-1">{info.ocr_error}</p>
+                      <p className="text-xs text-red-500 dark:text-red-400 mb-1">{info.ocr_error}</p>
                     )}
                     <button
                       onClick={() => handleRetryOCR(img.path)}
                       disabled={retrying === img.path}
-                      className="text-xs text-blue-500 hover:text-blue-600 disabled:text-gray-400"
+                      className="text-xs text-blue-500 hover:text-blue-600 disabled:text-gray-400 dark:text-blue-400 dark:hover:text-blue-300 dark:disabled:text-gray-500"
                     >
                       {retrying === img.path ? '重新识别中...' : '重新识别'}
                     </button>
@@ -948,15 +1283,15 @@ const HistoryImages = React.memo<{ addedImages: string[]; onImageClick: (url: st
 
     const getOCRStatusBadge = (info: ImageOCRInfo | undefined) => {
       if (!info) {
-        return <span className="text-xs text-gray-400 bg-gray-100 px-1 rounded">待识别</span>
+        return <span className="text-xs text-gray-400 bg-gray-100 dark:text-gray-500 dark:bg-gray-700 px-1 rounded">待识别</span>
       }
       if (info.ocr_status === 'success') {
-        return <span className="text-xs text-green-600 bg-green-50 px-1 rounded">成功</span>
+        return <span className="text-xs text-green-600 bg-green-50 dark:text-green-400 dark:bg-green-900/30 px-1 rounded">成功</span>
       }
       if (info.ocr_status === 'failed') {
-        return <span className="text-xs text-red-600 bg-red-50 px-1 rounded">失败</span>
+        return <span className="text-xs text-red-600 bg-red-50 dark:text-red-400 dark:bg-red-900/30 px-1 rounded">失败</span>
       }
-      return <span className="text-xs text-yellow-600 bg-yellow-50 px-1 rounded">中</span>
+      return <span className="text-xs text-yellow-600 bg-yellow-50 dark:text-yellow-400 dark:bg-yellow-900/30 px-1 rounded">中</span>
     }
 
     const handleRetryOCR = async (imagePath: string) => {
@@ -1031,8 +1366,8 @@ const HistoryImages = React.memo<{ addedImages: string[]; onImageClick: (url: st
       return (
         <div className="flex gap-1 mt-1">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="w-12 h-12 bg-gray-100 rounded flex items-center justify-center">
-              <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div key={i} className="w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded flex items-center justify-center">
+              <svg className="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             </div>
@@ -1048,7 +1383,7 @@ const HistoryImages = React.memo<{ addedImages: string[]; onImageClick: (url: st
         {historyImages.map((img, idx) => {
           const info = ocrInfo.get(img.path)
           return (
-            <div key={idx} className="border border-gray-200 rounded p-1.5">
+            <div key={idx} className="border border-gray-200 dark:border-gray-700 rounded p-1.5">
               <div className="flex items-center gap-2">
                 {img.error ? (
                   <div className="w-10 h-10 bg-red-50 rounded flex items-center justify-center flex-shrink-0">
@@ -1079,13 +1414,13 @@ const HistoryImages = React.memo<{ addedImages: string[]; onImageClick: (url: st
                         handleRetryOCR(img.path)
                       }}
                       disabled={retrying === img.path}
-                      className="text-xs text-blue-500 hover:text-blue-600 disabled:text-gray-400"
+                      className="text-xs text-blue-500 hover:text-blue-600 disabled:text-gray-400 dark:text-blue-400 dark:hover:text-blue-300 dark:disabled:text-gray-500"
                     >
                       {retrying === img.path ? '识别中...' : '重新识别'}
                     </button>
                   </div>
                   {info && info.text_content && (
-                    <p className="text-xs text-gray-500 line-clamp-1 mt-0.5" title={info.text_content}>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-1 mt-0.5" title={info.text_content}>
                       {info.text_content.substring(0, 50)}{info.text_content.length > 50 ? '...' : ''}
                     </p>
                   )}

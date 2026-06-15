@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 
 interface ModalProps {
@@ -10,32 +10,49 @@ interface ModalProps {
 
 const Modal: React.FC<ModalProps> = ({ title, children, onClose, isOpen }) => {
   const contentRef = useRef<HTMLDivElement>(null)
+  const [animating, setAnimating] = useState(false)
+  const [visible, setVisible] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
+      setVisible(true)
       document.body.style.overflow = 'hidden'
+      // 延迟触发动画让 DOM 先渲染
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setAnimating(true)
+        })
+      })
       setTimeout(() => contentRef.current?.scrollTo(0, 0), 0)
     } else {
-      document.body.style.overflow = 'unset'
+      setAnimating(false)
+      // 等待关闭动画完成后再隐藏
+      const timer = setTimeout(() => {
+        setVisible(false)
+        document.body.style.overflow = 'unset'
+      }, 150)
+      return () => clearTimeout(timer)
     }
     return () => {
       document.body.style.overflow = 'unset'
     }
   }, [isOpen])
 
-  if (!isOpen) return null
+  if (!visible) return null
 
   return ReactDOM.createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60" />
-      <div className="relative bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 flex-shrink-0">
-          <h2 className="text-xl font-semibold text-gray-800 tracking-tight">
+    <div className={`fixed inset-0 z-[9999] flex items-center justify-center p-4 transition-all duration-200 ease-out ${animating ? 'opacity-100' : 'opacity-0'}`}>
+      <div className={`absolute inset-0 transition-opacity duration-200 ${animating ? 'opacity-100' : 'opacity-0'}`}>
+        <div className="absolute inset-0 bg-black/60" />
+      </div>
+      <div className={`relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col transition-all duration-200 ${animating ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}>
+        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
+          <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100 tracking-tight">
             {title}
           </h2>
           <button
             onClick={onClose}
-            className="p-2 -mr-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-gray-200"
+            className="p-2 -mr-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-500 dark:hover:text-gray-300 dark:hover:bg-gray-700 rounded-full transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-gray-200"
             aria-label="关闭"
           >
             <svg

@@ -13,7 +13,7 @@ const Skeleton: React.FC<SkeletonProps> = ({
   width,
   height,
 }) => {
-  const baseClasses = 'animate-pulse bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 bg-[length:200%_100%]'
+  const baseClasses = 'animate-pulse bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 dark:from-gray-700 dark:via-gray-600 dark:to-gray-700 bg-[length:200%_100%]'
   
   const variantClasses = {
     rect: 'rounded-lg',
@@ -36,7 +36,7 @@ const Skeleton: React.FC<SkeletonProps> = ({
 
 export const TaskCardSkeleton: React.FC = () => {
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-3">
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-5 space-y-3">
       <div className="flex items-start justify-between">
         <Skeleton variant="text" className="w-3/4 h-5" />
         <Skeleton variant="rect" className="w-16 h-6 rounded-full" />

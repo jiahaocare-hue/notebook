@@ -257,7 +257,7 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
                 className={`px-3 py-1 text-xs rounded-md transition-colors ${
                   dateFilterMode === value
                     ? 'bg-blue-500 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
                 }`}
               >
                 {label}
@@ -277,7 +277,7 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+        <div className="bg-red-50 border border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400 px-4 py-3 rounded-lg">
           {error}
         </div>
       )}
@@ -315,7 +315,7 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
                             e.stopPropagation()
                             handleStatusChange(task, 'completed')
                           }}
-                          className="p-1 text-green-500 hover:bg-green-50 rounded transition-colors"
+                          className="p-1 text-green-500 hover:bg-green-50 dark:hover:bg-green-900/30 rounded transition-colors"
                           title="标记为完成"
                         >
                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -329,7 +329,7 @@ const WeekTasks: React.FC<WeekTasksProps> = ({ statusFilter, onTaskCountsChange 
                             e.stopPropagation()
                             handleStatusChange(task, 'in_progress')
                           }}
-                          className="p-1 text-yellow-500 hover:bg-yellow-50 rounded transition-colors"
+                          className="p-1 text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/30 rounded transition-colors"
                           title="开始处理"
                         >
                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

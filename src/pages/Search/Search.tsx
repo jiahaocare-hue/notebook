@@ -26,6 +26,25 @@ const Search: React.FC = () => {
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [taskToDelete, setTaskToDelete] = useState<number | null>(null)
+  const [parentTaskCache, setParentTaskCache] = useState<Record<number, Task>>({})
+
+  const loadParentTasks = useCallback(async (tasks: Task[]) => {
+    const parentIds = tasks.filter(t => t.parent_id !== null).map(t => t.parent_id!).filter((v, i, a) => a.indexOf(v) === i)
+    const newParents: Record<number, Task> = { ...parentTaskCache }
+    for (const parentId of parentIds) {
+      if (!newParents[parentId]) {
+        try {
+          const parent = await taskApi.get(parentId)
+          if (parent) {
+            newParents[parentId] = parent
+          }
+        } catch (err) {
+          // 忽略
+        }
+      }
+    }
+    setParentTaskCache(newParents)
+  }, [parentTaskCache])
 
   const handleSearch = useCallback(async () => {
     if (!query.trim()) return
@@ -47,15 +66,17 @@ const Search: React.FC = () => {
       console.log('[Search] handleSearch called')
       console.log('[Search] startDate:', startDate, 'endDate:', endDate)
       console.log('[Search] options:', options)
-      
+
       const result = await searchByMode(query, mode, options)
       console.log('[Search] result:', result)
-      
+
       if (result.error) {
         setError(result.error)
         setResults([])
       } else {
-        setResults(result.tasks || [])
+        const tasks = result.tasks || []
+        setResults(tasks)
+        loadParentTasks(tasks)
       }
     } catch (err) {
       console.error('Search failed:', err)
@@ -64,11 +85,26 @@ const Search: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [query, mode, startDate, endDate])
+  }, [query, mode, startDate, endDate, loadParentTasks])
 
-  const handleTaskClick = useCallback((task: Task) => {
-    setSelectedTask(task)
-    setShowDetailModal(true)
+  const handleTaskClick = useCallback(async (task: Task) => {
+    if (task.parent_id !== null) {
+      // 子任务：打开父任务详情
+      try {
+        const parentTask = await taskApi.get(task.parent_id)
+        if (parentTask) {
+          setSelectedTask(parentTask)
+          setShowDetailModal(true)
+        }
+      } catch (err) {
+        // 如果获取父任务失败，直接打开子任务
+        setSelectedTask(task)
+        setShowDetailModal(true)
+      }
+    } else {
+      setSelectedTask(task)
+      setShowDetailModal(true)
+    }
   }, [])
 
   const handleTaskUpdate = useCallback(async (updatedTask: Task) => {
@@ -140,7 +176,7 @@ const Search: React.FC = () => {
 
   return (
     <div className="flex-1 overflow-auto p-6">
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">搜索任务</h2>
+      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6">搜索任务</h2>
 
       <div className="mb-6 space-y-4">
         <div className="flex gap-2">
@@ -150,7 +186,7 @@ const Search: React.FC = () => {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="输入搜索内容..."
-              className="w-full px-4 py-3 pl-10 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all"
+              className="w-full px-4 py-3 pl-10 border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all"
             />
             <svg
               className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400"
@@ -177,7 +213,7 @@ const Search: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">搜索模式:</span>
+            <span className="text-sm text-gray-600 dark:text-gray-400">搜索模式:</span>
             <div className="flex gap-1">
               {[
                 { value: 'keyword', label: '关键词' },
@@ -190,7 +226,7 @@ const Search: React.FC = () => {
                   className={`px-4 py-2 text-sm rounded-xl transition-all duration-200 ${
                     mode === m.value
                       ? 'bg-blue-500 text-white shadow-md'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
                   }`}
                 >
                   {m.label}
@@ -200,7 +236,7 @@ const Search: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">自定义时间:</span>
+            <span className="text-sm text-gray-600 dark:text-gray-400">自定义时间:</span>
             <DateRangePicker
               startDate={startDate}
               endDate={endDate}
@@ -212,14 +248,14 @@ const Search: React.FC = () => {
       </div>
 
       {error && (
-        <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
-          <p className="text-yellow-800">{error}</p>
+        <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-xl dark:bg-yellow-900/20 dark:border-yellow-800">
+          <p className="text-yellow-800 dark:text-yellow-400">{error}</p>
         </div>
       )}
 
       {hasSearched && !loading && !error && (
-        <div className="mb-4 text-sm text-gray-600">
-          找到 <span className="font-semibold text-gray-900">{results.length}</span> 个结果
+        <div className="mb-4 text-sm text-gray-600 dark:text-gray-400">
+          找到 <span className="font-semibold text-gray-900 dark:text-gray-100">{results.length}</span> 个结果
         </div>
       )}
 
@@ -228,14 +264,25 @@ const Search: React.FC = () => {
           <TaskListSkeleton count={5} />
         ) : results.length > 0 ? (
           results.map((task) => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              onClick={() => handleTaskClick(task)}
-            />
+            <div key={task.id}>
+              {task.parent_id !== null && parentTaskCache[task.parent_id] && (
+                <div className="flex items-center gap-1 mb-1 ml-1">
+                  <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  <span className="text-xs text-gray-400 dark:text-gray-500">
+                    {parentTaskCache[task.parent_id].title}
+                  </span>
+                </div>
+              )}
+              <TaskCard
+                task={task}
+                onClick={() => handleTaskClick(task)}
+              />
+            </div>
           ))
         ) : hasSearched && !error ? (
-          <div className="text-center py-8 text-gray-500">没有找到匹配的任务</div>
+          <div className="text-center py-8 text-gray-500 dark:text-gray-400">没有找到匹配的任务</div>
         ) : null}
       </div>
 

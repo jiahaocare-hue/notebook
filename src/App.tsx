@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { MainLayout } from './components/Layout'
 import { TodayTasks } from './pages/TodayTasks'
 import { Search } from './pages/Search'
@@ -19,6 +19,40 @@ function AppContent() {
   const [isTransitioning, setIsTransitioning] = useState(false)
   
   const { taskCounts, totalTaskCounts, refreshCounts } = useTaskContext()
+  
+  type ThemeMode = 'light' | 'dark' | 'system'
+
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    try {
+      const saved = localStorage.getItem('theme-mode')
+      return (saved as ThemeMode) || 'system'
+    } catch {
+      return 'system'
+    }
+  })
+
+  useEffect(() => {
+    const applyTheme = (isDark: boolean) => {
+      if (isDark) {
+        document.documentElement.classList.add('dark')
+      } else {
+        document.documentElement.classList.remove('dark')
+      }
+    }
+
+    if (themeMode === 'dark') {
+      applyTheme(true)
+    } else if (themeMode === 'light') {
+      applyTheme(false)
+    } else {
+      // system
+      const mq = window.matchMedia('(prefers-color-scheme: dark)')
+      applyTheme(mq.matches)
+      const handler = (e: MediaQueryListEvent) => applyTheme(e.matches)
+      mq.addEventListener('change', handler)
+      return () => mq.removeEventListener('change', handler)
+    }
+  }, [themeMode])
 
   const handleNavChange = (page: PageType) => {
     if (page !== currentPage) {
@@ -26,7 +60,7 @@ function AppContent() {
       setTimeout(() => {
         setCurrentPage(page)
         setIsTransitioning(false)
-      }, 150)
+      }, 200)
     }
   }
 
@@ -72,7 +106,7 @@ function AppContent() {
       setTimeout(() => {
         setCurrentPage('tasks')
         setIsTransitioning(false)
-      }, 150)
+      }, 200)
     }
   }
 
@@ -83,7 +117,7 @@ function AppContent() {
       setTimeout(() => {
         setCurrentPage('tasks')
         setIsTransitioning(false)
-      }, 150)
+      }, 200)
     }
   }
 
@@ -92,11 +126,20 @@ function AppContent() {
     setTimeout(() => {
       setCurrentPage('search')
       setIsTransitioning(false)
-    }, 150)
+    }, 200)
   }, [])
 
   const handleSettings = useCallback(() => {
     setSettingsOpen(true)
+  }, [])
+
+  const handleThemeChange = useCallback((mode: ThemeMode) => {
+    setThemeMode(mode)
+    try {
+      localStorage.setItem('theme-mode', mode)
+    } catch {
+      // ignore
+    }
   }, [])
 
   const renderPage = () => {
@@ -133,11 +176,11 @@ function AppContent() {
         taskCounts={taskCounts}
         totalTaskCounts={totalTaskCounts}
       >
-        <div className={`transition-all duration-150 ${isTransitioning ? 'opacity-0 translate-y-2' : 'opacity-100 translate-y-0'}`}>
+        <div className={`transition-all duration-200 ease-out ${isTransitioning ? 'opacity-0 translate-y-2 scale-98' : 'opacity-100 translate-y-0 scale-100'}`}>
           {renderPage()}
         </div>
       </MainLayout>
-      <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} themeMode={themeMode} onThemeChange={handleThemeChange} />
     </>
   )
 }
