@@ -27,21 +27,14 @@
 
 ## 📸 Screenshots / 截图
 
-<!-- 主界面：保留现有截图 -->
 <p align="center">
   <img width="1482" alt="Task Manager 主界面" src="https://github.com/user-attachments/assets/658c1f46-8b4a-4a8b-8b80-40d2a97f8757" />
 </p>
 
-<!-- TODO: 替换为多张功能截图墙，建议结构如下（上传后把 URL 填入 src 即可）：
 <p align="center">
-  <img width="45%" alt="AI 对话页" src="REPLACE_WITH_ASK_CHAT_SCREENSHOT_URL" />
-  <img width="45%" alt="HITL 删除确认弹窗" src="REPLACE_WITH_HITL_CONFIRM_DIALOG_URL" />
+  <img width="45%" alt="AI 对话页" src="./docs/images/ask-chat.png" />
+  <img width="45%" alt="HITL 删除确认弹窗" src="./docs/images/hitl-confirm.png" />
 </p>
-<p align="center">
-  <img width="45%" alt="活动事件时间线" src="REPLACE_WITH_ACTIVITY_TIMELINE_URL" />
-  <img width="45%" alt="摘要与 Word 导出" src="REPLACE_WITH_SUMMARY_DOCX_URL" />
-</p>
--->
 
 ---
 
