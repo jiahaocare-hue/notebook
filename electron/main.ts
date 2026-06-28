@@ -4,11 +4,19 @@ import fs from 'fs'
 import Database from 'better-sqlite3'
 import { generateEmbedding } from './services/embedding'
 import { extractText } from './services/ocr'
-import { getDataDir } from './services/config'
+import { getDataDir, loadConfig } from './services/config'
 import { backupDatabaseIfNeeded, cleanupDanglingDatabaseReferences, ensureMigrationTable, runDatabaseMigration } from './services/database'
+import { ActivityLedger } from './services/activityLedger'
+import { AgentService } from './services/agent'
+import { AgentToolsDispatcher } from './services/agentTools'
+import { ChatStore } from './services/chatStore'
 import { ensureImagesDir, extractLocalImagePaths, resolveImageFilePath as resolveImageFilePathInDir } from './services/images'
 import { logger } from './services/logger'
+import { SystemPromptBuilder } from './services/systemPrompt'
+import { registerAgentHandlers } from './ipc/agent'
+import { registerAskHandlers } from './ipc/ask'
 import { registerAppHandlers, registerAutoUpdaterLifecycle } from './ipc/app'
+import { registerChatHandlers } from './ipc/chat'
 import { registerConfigHandlers } from './ipc/config'
 import { registerDialogHandlers } from './ipc/dialogs'
 import { registerFileHandlers } from './ipc/files'
@@ -21,6 +29,8 @@ import { registerTaskHandlers } from './ipc/tasks'
 let mainWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
 let activeDataDir: string | null = null
+let chatStore: ChatStore | null = null
+let agentService: AgentService | null = null
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -34,6 +44,7 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 const isDev = !app.isPackaged
+const appRootDir = resolveAppRootDir(__dirname)
 
 process.on('uncaughtException', (error) => {
   logger.error('Uncaught Exception:', error)
@@ -43,10 +54,26 @@ process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason)
 })
 
+function resolveAppRootDir(electronDirname: string): string {
+  const currentName = path.basename(electronDirname)
+  const parentDir = path.dirname(electronDirname)
+  const parentName = path.basename(parentDir)
+
+  if (currentName === 'electron' && parentName === 'dist-electron') {
+    return path.dirname(parentDir)
+  }
+
+  if (currentName === 'dist-electron') {
+    return path.dirname(electronDirname)
+  }
+
+  return path.resolve(electronDirname, '..')
+}
+
 function createWindow() {
   const iconPath = app.isPackaged 
     ? path.join(process.resourcesPath, 'resources', 'icon.ico')
-    : path.join(__dirname, '../resources/icon.ico')
+    : path.join(appRootDir, 'resources', 'icon.ico')
   
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -72,7 +99,7 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173')
     mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+    mainWindow.loadFile(path.join(appRootDir, 'dist', 'index.html'))
   }
 
   mainWindow.once('ready-to-show', () => {
@@ -127,12 +154,12 @@ function isAllowedExternalUrl(url: string): boolean {
 }
 
 function getActiveDataDir(): string {
-  return activeDataDir || getDataDir(isDev, __dirname)
+  return activeDataDir || getDataDir(isDev, appRootDir)
 }
 
 function initDatabase() {
   try {
-    const dataDir = getDataDir(isDev, __dirname)
+    const dataDir = getDataDir(isDev, appRootDir)
     activeDataDir = dataDir
     const dbPath = path.join(dataDir, 'tasks.db')
     
@@ -276,6 +303,91 @@ function initDatabase() {
 
     runDatabaseMigration(db, '006_common_indexes', 'Record common index baseline', () => {})
 
+    runDatabaseMigration(db, '007_activity_events_table', 'Create durable activity event ledger', () => {
+      db?.exec(`
+        CREATE TABLE IF NOT EXISTS activity_events (
+          id TEXT PRIMARY KEY,
+          task_id INTEGER,
+          task_title_snapshot TEXT,
+          event_type TEXT NOT NULL CHECK(event_type IN ('task_created', 'task_updated', 'task_status_changed', 'task_deleted')),
+          event_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          actor TEXT NOT NULL DEFAULT 'user' CHECK(actor IN ('user', 'agent')),
+          old_value TEXT,
+          new_value TEXT,
+          content_snapshot TEXT,
+          chat_session_id TEXT,
+          chat_message_id TEXT,
+          metadata TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_activity_events_type_time ON activity_events (event_type, event_time);
+        CREATE INDEX IF NOT EXISTS idx_activity_events_task_time ON activity_events (task_id, event_time);
+        CREATE INDEX IF NOT EXISTS idx_activity_events_session ON activity_events (chat_session_id);
+      `)
+    })
+
+    runDatabaseMigration(db, '008_chat_sessions_messages_kv', 'Create persistent chat sessions and kv store', () => {
+      db?.exec(`
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          last_message_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          sequence_index INTEGER NOT NULL,
+          role TEXT NOT NULL CHECK(role IN ('system', 'user', 'assistant', 'tool', 'summary')),
+          content TEXT,
+          tool_calls TEXT,
+          tool_call_id TEXT,
+          tool_name TEXT,
+          is_hidden INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_session_seq ON chat_messages (session_id, sequence_index);
+
+        CREATE TABLE IF NOT EXISTS kv_store (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+
+        INSERT OR IGNORE INTO kv_store (key, value) VALUES ('tasks_write_version', '0');
+      `)
+    })
+
+    runDatabaseMigration(db, '009_backfill_activity_events', 'Backfill activity events from task history', () => {
+      db?.exec(`
+        INSERT OR IGNORE INTO activity_events (
+          id, task_id, task_title_snapshot, event_type,
+          event_time, actor, old_value, new_value, content_snapshot, metadata
+        )
+        SELECT
+          'hist_' || h.id,
+          h.task_id,
+          t.title,
+          CASE h.action
+            WHEN 'created' THEN 'task_created'
+            WHEN 'status_changed' THEN 'task_status_changed'
+            WHEN 'updated' THEN 'task_updated'
+            ELSE 'task_updated'
+          END,
+          COALESCE(h.timestamp, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          'user',
+          h.old_value,
+          h.new_value,
+          t.description,
+          json_object('source_history_id', h.id)
+        FROM task_history h
+        LEFT JOIN tasks t ON t.id = h.task_id;
+      `)
+    })
+
     cleanupDanglingDatabaseReferences(db)
     db.exec('PRAGMA foreign_keys = ON')
 
@@ -411,6 +523,19 @@ async function updateTaskEmbedding(taskId: number, title: string, description: s
 
 app.whenReady().then(async () => {
   initDatabase()
+  if (db) {
+    const activityLedger = new ActivityLedger(db)
+    chatStore = new ChatStore(db)
+    const systemPromptBuilder = new SystemPromptBuilder(db)
+    const dispatcher = new AgentToolsDispatcher(db, activityLedger, updateTaskEmbedding)
+    agentService = new AgentService(
+      chatStore,
+      dispatcher,
+      systemPromptBuilder,
+      () => loadConfig().llm,
+      5
+    )
+  }
   registerImageProtocol()
   createWindow()
   
@@ -562,9 +687,18 @@ registerTaskHandlers({
   resolveImageFilePath,
   updateTaskEmbedding,
 })
+registerChatHandlers({
+  getChatStore: () => chatStore,
+})
+registerAgentHandlers({
+  getAgentService: () => agentService,
+})
 registerSearchHandlers({
   getDb: () => db,
   parseEmbeddingVector,
+})
+registerAskHandlers({
+  getDb: () => db,
 })
 registerImageHandlers({
   getDb: () => db,
@@ -572,7 +706,7 @@ registerImageHandlers({
   getMainWindow: () => mainWindow,
   resolveImageFilePath,
 })
-registerConfigHandlers({ isDev, appRootDir: __dirname, getActiveDataDir })
+registerConfigHandlers({ isDev, appRootDir, getActiveDataDir })
 registerDialogHandlers({ getMainWindow: () => mainWindow })
 registerLlmHandlers()
 registerFileHandlers({ getMainWindow: () => mainWindow })

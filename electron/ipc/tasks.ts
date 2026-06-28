@@ -10,6 +10,7 @@ import {
 } from '../services/query'
 import { extractLocalImagePaths } from '../services/images'
 import { buildDateRangeCondition } from '../services/query'
+import { ActivityLedger, bumpTasksWriteVersion, type ActivityEventType } from '../services/activityLedger'
 import { logger } from '../services/logger'
 import type { DatabaseGetter, ImagePathResolver } from './context'
 
@@ -37,6 +38,50 @@ function addHistoryRecord(context: TaskHandlersContext, taskId: number, action: 
   stmt?.run(taskId, action, oldValue, newValue)
 }
 
+function recordActivityEvent(
+  context: TaskHandlersContext,
+  input: {
+    task: TaskRow
+    eventType: ActivityEventType
+    oldValue?: unknown
+    newValue?: unknown
+    metadata?: Record<string, unknown>
+  }
+): void {
+  const db = context.getDb()
+  if (!db) {
+    return
+  }
+
+  try {
+    new ActivityLedger(db).recordEvent({
+      task_id: input.task.id,
+      task_title_snapshot: input.task.title,
+      event_type: input.eventType,
+      actor: 'user',
+      old_value: input.oldValue,
+      new_value: input.newValue,
+      content_snapshot: input.task.description,
+      metadata: input.metadata ?? { source: 'ipc' },
+    })
+  } catch (error) {
+    logger.error('Failed to record activity event:', error)
+  }
+}
+
+function bumpWriteVersion(context: TaskHandlersContext): void {
+  const db = context.getDb()
+  if (!db) {
+    return
+  }
+
+  try {
+    bumpTasksWriteVersion(db)
+  } catch (error) {
+    logger.error('Failed to bump tasks_write_version:', error)
+  }
+}
+
 function queryByIdsInChunks<T>(
   context: TaskHandlersContext,
   ids: number[],
@@ -56,6 +101,15 @@ export function registerTaskHandlers(context: TaskHandlersContext): void {
 
     if (taskId) {
       addHistoryRecord(context, taskId, 'created', null, JSON.stringify({ title: task.title, description: task.description, status: task.status || 'in_progress', priority: task.priority || 'medium', due_date: task.due_date, parent_id: task.parent_id !== undefined ? task.parent_id : null }))
+      const createdTask = context.getDb()?.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined
+      if (createdTask) {
+        recordActivityEvent(context, {
+          task: createdTask,
+          eventType: 'task_created',
+          newValue: createdTask,
+        })
+        bumpWriteVersion(context)
+      }
       context.updateTaskEmbedding(taskId, task.title, task.description || null).catch(err => logger.error('Failed to generate embedding:', err))
 
       if (task.description) {
@@ -142,6 +196,16 @@ export function registerTaskHandlers(context: TaskHandlersContext): void {
     const action = task.status !== undefined && task.status !== oldTask.status ? 'status_changed' : 'updated'
     logger.debug('[task:update] Adding history record, action:', action, 'changes:', JSON.stringify(changes))
     addHistoryRecord(context, taskId, action, JSON.stringify(changes.old), JSON.stringify(changes.new))
+    const updatedTask = context.getDb()?.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined
+    if (updatedTask) {
+      recordActivityEvent(context, {
+        task: updatedTask,
+        eventType: action === 'status_changed' ? 'task_status_changed' : 'task_updated',
+        oldValue: action === 'status_changed' ? oldTask.status : changes.old,
+        newValue: action === 'status_changed' ? updatedTask.status : changes.new,
+      })
+      bumpWriteVersion(context)
+    }
 
     if (task.title !== undefined || task.description !== undefined) {
       const newTitle = task.title !== undefined ? task.title : oldTask.title
@@ -184,9 +248,16 @@ export function registerTaskHandlers(context: TaskHandlersContext): void {
 
           try {
             for (const id of allIdsToDelete) {
-              const subtask = context.getDb()?.prepare('SELECT description FROM tasks WHERE id = ?').get(id) as { description: string | null } | undefined
+              const subtask = context.getDb()?.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined
               if (subtask?.description) {
                 imageFiles.push(...extractLocalImagePaths(subtask.description))
+              }
+              if (subtask) {
+                recordActivityEvent(context, {
+                  task: subtask,
+                  eventType: 'task_deleted',
+                  oldValue: subtask,
+                })
               }
               context.getDb()?.prepare('DELETE FROM task_embeddings WHERE task_id = ?').run(id)
               context.getDb()?.prepare('DELETE FROM task_history WHERE task_id = ?').run(id)
@@ -200,6 +271,7 @@ export function registerTaskHandlers(context: TaskHandlersContext): void {
         })
 
         deleteTransaction?.()
+        bumpWriteVersion(context)
       } catch (transactionError) {
         logger.error('Failed to delete task from database:', transactionError)
         return false
@@ -548,4 +620,3 @@ export function registerTaskHandlers(context: TaskHandlersContext): void {
     }
   })
 }
-

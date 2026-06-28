@@ -12,6 +12,8 @@ import type {
   SummaryRequest,
   SummaryStatsFilters,
   Task,
+  TaskAskRequest,
+  TaskAskResult,
   TaskFilters,
   TaskHistory,
   TaskStats,
@@ -59,6 +61,7 @@ const electronAPI: ElectronAPI = {
   getLlmConfig: (): Promise<{ apiKey: string | null; baseUrl: string | null; model: string | null; timeout: number; verifySSL: boolean; promptTemplate: string | null }> => ipcRenderer.invoke('llm:getConfig'),
   setLlmConfig: (config: { apiKey?: string; baseUrl?: string; model?: string; timeout?: number; verifySSL?: boolean; promptTemplate?: string }): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('llm:setConfig', config),
   generateSummary: (request: SummaryRequest): Promise<{ success: boolean; summary?: string; error?: string }> => ipcRenderer.invoke('llm:generateSummary', request),
+  askTasks: (request: TaskAskRequest): Promise<TaskAskResult> => ipcRenderer.invoke('ask:tasks', request),
 
   saveFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: string }): Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }> => ipcRenderer.invoke('file:save', options),
   saveBinaryFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: number[] }): Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }> => ipcRenderer.invoke('file:saveBinary', options),
@@ -84,3 +87,53 @@ const electronAPI: ElectronAPI = {
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)
+
+contextBridge.exposeInMainWorld('agentApi', {
+  chat: (payload: { sessionId: string; message: string; requestId: string }) => {
+    ipcRenderer.send('agent:chat', payload)
+  },
+  stop: (requestId: string) => {
+    ipcRenderer.send('agent:stop', { requestId })
+  },
+  confirmHITL: (requestId: string, confirmed: boolean) => {
+    ipcRenderer.send('agent:hitl-confirm', { requestId, confirmed })
+  },
+  onToken: (callback: (data: { requestId: string; delta: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { requestId: string; delta: string }) => callback(data)
+    ipcRenderer.on('agent:stream:token', listener)
+    return () => ipcRenderer.removeListener('agent:stream:token', listener)
+  },
+  onTool: (callback: (data: { requestId: string; toolName: string; args: unknown }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { requestId: string; toolName: string; args: unknown }) => callback(data)
+    ipcRenderer.on('agent:stream:tool', listener)
+    return () => ipcRenderer.removeListener('agent:stream:tool', listener)
+  },
+  onResult: (callback: (data: { requestId: string; toolName: string; result: unknown }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { requestId: string; toolName: string; result: unknown }) => callback(data)
+    ipcRenderer.on('agent:stream:result', listener)
+    return () => ipcRenderer.removeListener('agent:stream:result', listener)
+  },
+  onEnd: (callback: (data: { requestId: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { requestId: string }) => callback(data)
+    ipcRenderer.on('agent:stream:end', listener)
+    return () => ipcRenderer.removeListener('agent:stream:end', listener)
+  },
+  onError: (callback: (data: { requestId: string; error: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { requestId: string; error: string }) => callback(data)
+    ipcRenderer.on('agent:stream:error', listener)
+    return () => ipcRenderer.removeListener('agent:stream:error', listener)
+  },
+  onHITLRequired: (callback: (data: { requestId: string; toolName: string; args: unknown; toolCallId: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { requestId: string; toolName: string; args: unknown; toolCallId: string }) => callback(data)
+    ipcRenderer.on('agent:stream:hitl-required', listener)
+    return () => ipcRenderer.removeListener('agent:stream:hitl-required', listener)
+  },
+})
+
+contextBridge.exposeInMainWorld('chatApi', {
+  listSessions: () => ipcRenderer.invoke('chat:listSessions'),
+  loadSession: (sessionId: string) => ipcRenderer.invoke('chat:loadSession', sessionId),
+  createSession: (title?: string) => ipcRenderer.invoke('chat:createSession', title),
+  deleteSession: (sessionId: string) => ipcRenderer.invoke('chat:deleteSession', sessionId),
+  renameSession: (sessionId: string, title: string) => ipcRenderer.invoke('chat:renameSession', sessionId, title),
+})

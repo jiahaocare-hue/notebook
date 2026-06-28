@@ -1,8 +1,8 @@
 {
   "name": "task-manager",
-  "version": "1.4.2",
+  "version": "2.0.0",
   "description": "Electron + React + TypeScript + Vite Task Manager Application",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build && npm run build:electron",
@@ -11,6 +11,7 @@
     "electron:dev": "npm run build:electron && concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "npm run build && electron-builder",
     "regression:smoke": "node scripts/run-electron-node.cjs scripts/regression-smoke.cjs",
+    "agent:smoke": "npm run build:electron && node scripts/run-electron-node.cjs scripts/agent-smoke.cjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig-electron.json --noEmit",
     "lint": "eslint . && npm run typecheck",
     "rebuild:sharp": "npm install --ignore-scripts=false --foreground-scripts --verbose sharp",

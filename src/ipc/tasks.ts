@@ -1,5 +1,7 @@
 import type {
   ActivityTimelineItem,
+  AgentApi,
+  ChatApi,
   ElectronAPI,
   ImageOCRInfo,
   NewTask,
@@ -10,6 +12,8 @@ import type {
   SummaryRequest,
   SummaryStatsFilters,
   Task,
+  TaskAskRequest,
+  TaskAskResult,
   TaskFilters,
   TaskHistory,
   TaskStats,
@@ -20,6 +24,8 @@ import type {
 declare global {
   interface Window {
     electronAPI: ElectronAPI
+    agentApi?: AgentApi
+    chatApi?: ChatApi
   }
 }
 
@@ -193,6 +199,17 @@ export const llmApi = {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.generateSummary(request)
+  },
+}
+
+export const askApi = {
+  askTasks: async (request: TaskAskRequest): Promise<TaskAskResult> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    if (typeof api.askTasks !== 'function') {
+      throw new Error('问答助手接口尚未加载，请重启应用后再试')
+    }
+    return api.askTasks(request)
   },
 }
 

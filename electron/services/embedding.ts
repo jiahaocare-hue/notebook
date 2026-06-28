@@ -12,9 +12,15 @@ const MODEL_NAME = 'BAAI-bge-small-zh-v1d5'
 function getModelsDir(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'resources', 'models')
-  } else {
-    return path.join(__dirname, '../../resources/models')
   }
+
+  const candidates = [
+    path.join(app.getAppPath(), 'resources', 'models'),
+    path.join(process.cwd(), 'resources', 'models'),
+    path.join(__dirname, '../../resources/models'),
+  ]
+
+  return candidates.find(candidate => fs.existsSync(path.join(candidate, MODEL_NAME))) || candidates[0]
 }
 
 async function getEmbedder() {

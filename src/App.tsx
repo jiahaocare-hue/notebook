@@ -9,8 +9,9 @@ import { taskApi } from './ipc/tasks'
 const Search = lazy(() => import('./pages/Search').then(module => ({ default: module.Search })))
 const CalendarPage = lazy(() => import('./pages/Calendar').then(module => ({ default: module.CalendarPage })))
 const Summary = lazy(() => import('./pages/Summary').then(module => ({ default: module.Summary })))
+const Ask = lazy(() => import('./pages/Ask').then(module => ({ default: module.Ask })))
 
-type PageType = 'tasks' | 'search' | 'calendar' | 'summary'
+type PageType = 'tasks' | 'search' | 'calendar' | 'summary' | 'ask'
 
 function AppContent() {
   const [currentPage, setCurrentPage] = useState<PageType>('tasks')
@@ -158,6 +159,8 @@ function AppContent() {
         return <Search />
       case 'summary':
         return <Summary />
+      case 'ask':
+        return <Ask />
       default:
         return null
     }

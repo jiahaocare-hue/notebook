@@ -5,8 +5,8 @@ import { StatusFilter, DateFilter } from '../../types'
 
 interface MainLayoutProps {
   children: React.ReactNode
-  activeNav: 'tasks' | 'search' | 'calendar' | 'summary'
-  onNavChange: (nav: 'tasks' | 'search' | 'calendar' | 'summary') => void
+  activeNav: 'tasks' | 'search' | 'calendar' | 'summary' | 'ask'
+  onNavChange: (nav: 'tasks' | 'search' | 'calendar' | 'summary' | 'ask') => void
   statusFilter: StatusFilter
   onStatusFilterChange: (filter: StatusFilter) => void
   dateFilter: DateFilter

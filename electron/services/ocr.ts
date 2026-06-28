@@ -32,7 +32,14 @@ function getTessDataPath(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'resources', 'tessdata')
   }
-  return path.join(__dirname, '../../resources/tessdata')
+
+  const candidates = [
+    path.join(app.getAppPath(), 'resources', 'tessdata'),
+    path.join(process.cwd(), 'resources', 'tessdata'),
+    path.join(__dirname, '../../resources/tessdata'),
+  ]
+
+  return candidates.find(candidate => fs.existsSync(candidate)) || candidates[0]
 }
 
 function sendProgress(window: BrowserWindow | null, status: string, progress: number, message: string) {

@@ -69,19 +69,19 @@ export function resolveIncomingApiKey(
   return incomingApiKey
 }
 
-export function getDefaultDataDir(isDev: boolean, electronDirname: string): string {
+export function getDefaultDataDir(isDev: boolean, appRootDir: string): string {
   if (isDev) {
-    return path.join(electronDirname, '..', 'data')
+    return path.join(appRootDir, 'data')
   }
 
   return path.join(app.getPath('userData'), 'data')
 }
 
-export function getDataDir(isDev: boolean, electronDirname: string): string {
+export function getDataDir(isDev: boolean, appRootDir: string): string {
   const config = loadConfig()
   if (config.dataDir && fs.existsSync(config.dataDir)) {
     return config.dataDir
   }
 
-  return getDefaultDataDir(isDev, electronDirname)
+  return getDefaultDataDir(isDev, appRootDir)
 }

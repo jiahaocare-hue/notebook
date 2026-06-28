@@ -1,3 +1,5 @@
+import { normalizeChatCompletionsUrl, postJsonWithElectronNet } from './llmRequest'
+
 export interface LLMConfig {
   apiKey: string
   baseUrl: string
@@ -52,266 +54,178 @@ export interface SummaryRequest {
   inProgressTasks?: CompletedTask[]
 }
 
-const DEFAULT_PROMPT_TEMPLATE = `你是一个任务管理助手，请根据以下任务数据生成一份结构清晰、内容详实的总结报告。
+const priorityLabels: Record<string, string> = {
+  high: '高',
+  medium: '中',
+  low: '低',
+}
+
+const statusLabels: Record<string, string> = {
+  completed: '已完成',
+  in_progress: '进行中',
+  pending: '待处理',
+  cancelled: '已取消',
+}
+
+const DEFAULT_PROMPT_TEMPLATE = `你是一个任务管理助手。请根据下面的任务数据生成一份结构清晰、事实准确的中文工作总结。
 
 ## 时间范围
 {{timeRange}}
 
-## 任务统计数据
+## 任务统计
 - 总任务数: {{total}}
 - 已完成: {{completed}}
 - 进行中: {{inProgress}}
 - 待处理: {{pending}}
 - 已取消: {{cancelled}}
 - 完成率: {{completionRate}}%
-{{#avgCompletionTime}}- 平均完成时间: {{avgCompletionTime}} 天{{/avgCompletionTime}}
+{{avgCompletionTimeLine}}
 
 ## 优先级分布
 {{priorityDistribution}}
 
-## 已完成任务详情
+## 已完成任务
 {{completedTasksList}}
 
-## 进行中任务详情
+## 进行中任务
 {{inProgressTasksList}}
 
-## 待处理任务详情
+## 待处理任务
 {{pendingTasksList}}
 
-请严格按照以下格式生成总结报告：
+请按以下结构输出：
 
-### 一、已完成任务（共{{completed}}项）
-请详细列出每项已完成任务：
-- 任务名称
-- 任务描述（如有）
-- 完成时间
-- 任务成果或关键产出
+### 一、已完成工作
+列出主要完成项、关键产出和可见进展。
 
-### 二、未完成任务
-#### 1. 进行中任务（共{{inProgress}}项）
-请详细列出每项进行中任务：
-- 任务名称
-- 任务描述（如有）
-- 当前进度状态
-- 截止日期（如有）
-- 预计完成时间
+### 二、推进中工作
+列出仍在推进的任务、当前状态和下一步。
 
-#### 2. 待处理任务（共{{pending}}项）
-请详细列出每项待处理任务：
-- 任务名称
-- 任务描述（如有）
-- 优先级
-- 截止日期（如有）
+### 三、待处理与风险
+列出待处理任务、风险点和需要关注的事项。
 
-### 三、总结与建议
-简要总结工作情况，给出改进建议和下一步计划。
+### 四、总结建议
+给出简洁复盘和后续建议。
 
-报告应采用正式、专业的文档格式，内容准确、条理清晰，便于阅读和理解。请用中文回复。`
+要求：只根据提供的数据，不要编造；如果某一部分没有数据，请明确说明。`
+
+function truncateText(text: string | null | undefined, maxLength = 220): string {
+  if (!text) {
+    return ''
+  }
+  const compacted = text
+    .replace(/!\[.*?\]\(local:\/\/[^)]+\)/g, '')
+    .replace(/!\[.*?\]\(app-image:\/\/[^)]+\)/g, '')
+    .replace(/!\[.*?\]\(data:image[^)]+\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return compacted.length > maxLength ? `${compacted.slice(0, maxLength)}...` : compacted
+}
+
+function formatTask(task: CompletedTask, index: number): string {
+  const lines = [
+    `${index + 1}. [${priorityLabels[task.priority] || task.priority}优先级] ${task.title}`,
+    `   状态: ${statusLabels[task.status] || task.status}`,
+  ]
+
+  const description = truncateText(task.description)
+  if (description) {
+    lines.push(`   描述: ${description}`)
+  }
+  if (task.dueDate) {
+    lines.push(`   截止日期: ${task.dueDate}`)
+  }
+  if (task.completedAt) {
+    lines.push(`   完成时间: ${task.completedAt.split('T')[0]}`)
+  }
+
+  return lines.join('\n')
+}
+
+function formatTaskList(tasks: CompletedTask[] | undefined, limit: number): string {
+  if (!tasks || tasks.length === 0) {
+    return '无'
+  }
+
+  return tasks.slice(0, limit).map(formatTask).join('\n\n')
+}
 
 function buildPrompt(request: SummaryRequest, customTemplate?: string): string {
   const { stats, completedTasks, timeRange, pendingTasks = [], inProgressTasks = [] } = request
-
-  let timeRangeText = '全部时间'
-  if (timeRange) {
-    timeRangeText = `${timeRange.startDate} 至 ${timeRange.endDate}`
-  }
-
+  const timeRangeText = timeRange ? `${timeRange.startDate} 至 ${timeRange.endDate}` : '全部时间'
   const priorityText = Object.entries(stats.priorityDistribution)
     .filter(([, count]) => count > 0)
-    .map(([priority, count]) => `- ${priority === 'high' ? '高' : priority === 'medium' ? '中' : '低'}优先级: ${count} 个任务`)
-    .join('\n')
+    .map(([priority, count]) => `- ${priorityLabels[priority] || priority}优先级: ${count} 个任务`)
+    .join('\n') || '无'
+  const avgCompletionTimeLine = stats.avgCompletionTime !== undefined
+    ? `- 平均完成时间: ${stats.avgCompletionTime.toFixed(1)} 天`
+    : ''
 
-  const monthlyText = stats.monthlyDistribution
-    .map(m => `- ${m.month}: ${m.count} 个任务`)
-    .join('\n')
-
-  const tasksText = completedTasks
-    .slice(0, 50)
-    .map((task, index) => {
-      const priorityLabel = task.priority === 'high' ? '[高]' : task.priority === 'medium' ? '[中]' : '[低]'
-      let taskText = `${index + 1}. ${priorityLabel} ${task.title}`
-      
-      if (task.description) {
-        taskText += `\n   描述: ${task.description.substring(0, 200)}${task.description.length > 200 ? '...' : ''}`
-      }
-      
-      if (task.dueDate) {
-        taskText += `\n   截止日期: ${task.dueDate}`
-      }
-      
-      if (task.createdAt && task.completedAt) {
-        const created = new Date(task.createdAt)
-        const completed = new Date(task.completedAt)
-        const days = Math.round((completed.getTime() - created.getTime()) / (1000 * 60 * 60 * 24))
-        taskText += `\n   完成耗时: ${days} 天`
-      }
-      
-      if (task.completedAt) {
-        taskText += `\n   完成时间: ${task.completedAt.split('T')[0]}`
-      }
-      
-      if (task.history && task.history.length > 0) {
-        const historyText = task.history
-          .slice(0, 5)
-          .map(h => {
-            const actionMap: Record<string, string> = {
-              'create': '创建',
-              'update': '更新',
-              'status_change': '状态变更',
-              'priority_change': '优先级变更',
-            }
-            const actionLabel = actionMap[h.action] || h.action
-            return `${actionLabel}: ${h.oldValue || '无'} → ${h.newValue || '无'}`
-          })
-          .join('; ')
-        taskText += `\n   更新记录: ${historyText}`
-      }
-      
-      return taskText
-    })
-    .join('\n\n')
-
-  const inProgressTasksText = inProgressTasks
-    .slice(0, 30)
-    .map((task, index) => {
-      const priorityLabel = task.priority === 'high' ? '[高]' : task.priority === 'medium' ? '[中]' : '[低]'
-      let taskText = `${index + 1}. ${priorityLabel} ${task.title}`
-      
-      if (task.description) {
-        taskText += `\n   描述: ${task.description.substring(0, 200)}${task.description.length > 200 ? '...' : ''}`
-      }
-      
-      if (task.dueDate) {
-        taskText += `\n   截止日期: ${task.dueDate}`
-      }
-      
-      return taskText
-    })
-    .join('\n\n')
-
-  const pendingTasksText = pendingTasks
-    .slice(0, 30)
-    .map((task, index) => {
-      const priorityLabel = task.priority === 'high' ? '[高]' : task.priority === 'medium' ? '[中]' : '[低]'
-      let taskText = `${index + 1}. ${priorityLabel} ${task.title}`
-      
-      if (task.description) {
-        taskText += `\n   描述: ${task.description.substring(0, 200)}${task.description.length > 200 ? '...' : ''}`
-      }
-      
-      if (task.dueDate) {
-        taskText += `\n   截止日期: ${task.dueDate}`
-      }
-      
-      return taskText
-    })
-    .join('\n\n')
-
-  const template = customTemplate || DEFAULT_PROMPT_TEMPLATE
-
-  let prompt = template
+  return (customTemplate || DEFAULT_PROMPT_TEMPLATE)
     .replace(/\{\{timeRange\}\}/g, timeRangeText)
     .replace(/\{\{total\}\}/g, String(stats.total))
     .replace(/\{\{completed\}\}/g, String(stats.completed))
     .replace(/\{\{inProgress\}\}/g, String(stats.inProgress))
     .replace(/\{\{pending\}\}/g, String(stats.pending))
     .replace(/\{\{cancelled\}\}/g, String(stats.cancelled))
-    .replace(/\{\{completionRate\}\}/g, (stats.completionRate * 100).toFixed(1))
+    .replace(/\{\{completionRate\}\}/g, stats.completionRate.toFixed(1))
+    .replace(/\{\{avgCompletionTimeLine\}\}/g, avgCompletionTimeLine)
     .replace(/\{\{priorityDistribution\}\}/g, priorityText)
-    .replace(/\{\{monthlyDistribution\}\}/g, monthlyText)
-    .replace(/\{\{completedTasksList\}\}/g, tasksText || '无')
-    .replace(/\{\{inProgressTasksList\}\}/g, inProgressTasksText || '无')
-    .replace(/\{\{pendingTasksList\}\}/g, pendingTasksText || '无')
-
-  if (stats.avgCompletionTime) {
-    prompt = prompt.replace(/\{\{avgCompletionTime\}\}/g, stats.avgCompletionTime.toFixed(1))
-    prompt = prompt.replace(/\{\{#avgCompletionTime\}\}([\s\S]*?)\{\{\/avgCompletionTime\}\}/g, '$1')
-  } else {
-    prompt = prompt.replace(/\{\{#avgCompletionTime\}\}[\s\S]*?\{\{\/avgCompletionTime\}\}/g, '')
-    prompt = prompt.replace(/\{\{avgCompletionTime\}\}/g, '')
-  }
-
-  return prompt
+    .replace(/\{\{completedTasksList\}\}/g, formatTaskList(completedTasks, 50))
+    .replace(/\{\{inProgressTasksList\}\}/g, formatTaskList(inProgressTasks, 30))
+    .replace(/\{\{pendingTasksList\}\}/g, formatTaskList(pendingTasks, 30))
 }
 
 export async function generateSummary(
   config: LLMConfig,
   request: SummaryRequest
 ): Promise<string> {
-  const { 
-    apiKey, 
-    baseUrl, 
+  const {
+    apiKey,
+    baseUrl,
     model = 'gpt-3.5-turbo',
     timeout = 30,
     verifySSL = true,
-    promptTemplate
+    promptTemplate,
   } = config
 
   if (!apiKey) {
     throw new Error('API Key 未配置')
   }
-
-  const prompt = buildPrompt(request, promptTemplate)
-
-  const apiUrl = baseUrl.endsWith('/v1')
-    ? `${baseUrl}/chat/completions`
-    : `${baseUrl}/v1/chat/completions`
-
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeout * 1000)
-
-  try {
-    const fetchOptions: RequestInit & { agent?: unknown } = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.7,
-        max_tokens: 2000,
-      }),
-      signal: controller.signal,
-    }
-
-    if (!verifySSL) {
-      const https = await import('https')
-      fetchOptions.agent = new https.Agent({
-        rejectUnauthorized: false,
-      })
-    }
-
-    const response = await fetch(apiUrl, fetchOptions)
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`LLM API 调用失败: ${response.status} ${errorText}`)
-    }
-
-    const data = await response.json() as {
-      choices: Array<{
-        message: {
-          content: string
-        }
-      }>
-    }
-
-    return data.choices[0]?.message?.content || '生成总结失败'
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error(`请求超时（${timeout}秒）`)
-    }
-    throw error
-  } finally {
-    clearTimeout(timeoutId)
+  if (!baseUrl) {
+    throw new Error('Base URL 未配置')
   }
+
+  const response = await postJsonWithElectronNet<{
+    choices: Array<{
+      message: {
+        content: string
+      }
+    }>
+  }>(normalizeChatCompletionsUrl(baseUrl), {
+    apiKey,
+    timeout,
+    verifySSL,
+    body: {
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: buildPrompt(request, promptTemplate),
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 2000,
+    },
+  })
+
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(`LLM API 调用失败: ${response.statusCode} ${response.bodyText}`)
+  }
+
+  return response.data.choices[0]?.message?.content || '生成总结失败'
 }
 
 export { DEFAULT_PROMPT_TEMPLATE }
+

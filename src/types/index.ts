@@ -242,6 +242,98 @@ export interface SummaryResult extends OperationResult {
   summary?: string
 }
 
+export type TaskAskSource = 'tasks' | 'history' | 'ocr'
+
+export interface TaskAskScope {
+  startDate?: string
+  endDate?: string
+  status?: StatusFilter
+  sources?: TaskAskSource[]
+}
+
+export interface TaskAskRequest {
+  question: string
+  scope?: TaskAskScope
+}
+
+export interface TaskAskEvidence {
+  id: string
+  source: TaskAskSource
+  taskId: number
+  taskTitle: string
+  snippet: string
+  matchedText: string
+  timestamp?: string | null
+  imagePath?: string | null
+  score: number
+}
+
+export interface TaskAskResult extends OperationResult {
+  answer?: string
+  evidences: TaskAskEvidence[]
+}
+
+export interface ChatSession {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  last_message_at: string
+}
+
+export type ChatMessageRole = 'system' | 'user' | 'assistant' | 'tool' | 'summary'
+
+export interface ChatMessage {
+  id: string
+  session_id: string
+  sequence_index: number
+  role: ChatMessageRole
+  content: string | null
+  tool_calls: string | null
+  tool_call_id: string | null
+  tool_name: string | null
+  is_hidden: number
+  created_at: string
+}
+
+export interface ParsedToolCall {
+  id: string
+  name: string
+  args: Record<string, unknown>
+}
+
+export type MessageDisplayItem =
+  | { kind: 'user'; id: string; content: string }
+  | { kind: 'assistant'; id: string; content: string; error?: boolean }
+  | { kind: 'tool-bubble'; id: string; toolName: string; args: unknown; result?: unknown; status: 'running' | 'done' | 'error' }
+  | { kind: 'hitl-card'; id: string; toolName: string; args: unknown; toolCallId: string; requestId: string; decided?: boolean }
+
+export interface AgentChatPayload {
+  sessionId: string
+  message: string
+  requestId: string
+}
+
+export interface AgentApi {
+  chat: (payload: AgentChatPayload) => void
+  stop: (requestId: string) => void
+  confirmHITL: (requestId: string, confirmed: boolean) => void
+  onToken: (callback: (data: { requestId: string; delta: string }) => void) => () => void
+  onTool: (callback: (data: { requestId: string; toolName: string; args: unknown }) => void) => () => void
+  onResult: (callback: (data: { requestId: string; toolName: string; result: unknown }) => void) => () => void
+  onEnd: (callback: (data: { requestId: string }) => void) => () => void
+  onError: (callback: (data: { requestId: string; error: string }) => void) => () => void
+  onHITLRequired: (callback: (data: { requestId: string; toolName: string; args: unknown; toolCallId: string }) => void) => () => void
+}
+
+export interface ChatApi {
+  listSessions: () => Promise<ChatSession[]>
+  loadSession: (sessionId: string) => Promise<ChatMessage[]>
+  createSession: (title?: string) => Promise<ChatSession>
+  deleteSession: (sessionId: string) => Promise<boolean>
+  renameSession: (sessionId: string, title: string) => Promise<boolean>
+}
+
 export interface FileSaveOptions {
   defaultPath: string
   filters: { name: string; extensions: string[] }[]
@@ -305,6 +397,7 @@ export interface ElectronAPI {
   getLlmConfig: () => Promise<LlmConfig>
   setLlmConfig: (config: LlmConfigUpdate) => Promise<OperationResult>
   generateSummary: (request: SummaryRequest) => Promise<SummaryResult>
+  askTasks: (request: TaskAskRequest) => Promise<TaskAskResult>
   saveFile: (options: FileSaveOptions) => Promise<FileSaveResult>
   saveBinaryFile: (options: BinaryFileSaveOptions) => Promise<FileSaveResult>
   writeImageToClipboard: (imageData: string) => Promise<OperationResult>
