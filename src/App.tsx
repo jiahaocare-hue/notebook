@@ -1,13 +1,14 @@
-import { useState, useCallback, useEffect } from 'react'
+import { Suspense, lazy, useState, useCallback, useEffect } from 'react'
 import { MainLayout } from './components/Layout'
 import { TodayTasks } from './pages/TodayTasks'
-import { Search } from './pages/Search'
-import { CalendarPage } from './pages/Calendar'
-import { Summary } from './pages/Summary'
 import { SettingsModal } from './components/Settings'
 import { TaskProvider, useTaskContext } from './context/TaskContext'
 import { StatusFilter, DateFilter } from './types'
 import { taskApi } from './ipc/tasks'
+
+const Search = lazy(() => import('./pages/Search').then(module => ({ default: module.Search })))
+const CalendarPage = lazy(() => import('./pages/Calendar').then(module => ({ default: module.CalendarPage })))
+const Summary = lazy(() => import('./pages/Summary').then(module => ({ default: module.Summary })))
 
 type PageType = 'tasks' | 'search' | 'calendar' | 'summary'
 
@@ -177,7 +178,9 @@ function AppContent() {
         totalTaskCounts={totalTaskCounts}
       >
         <div className={`transition-all duration-200 ease-out ${isTransitioning ? 'opacity-0 translate-y-2 scale-98' : 'opacity-100 translate-y-0 scale-100'}`}>
-          {renderPage()}
+          <Suspense fallback={<div className="p-6 text-sm text-gray-500 dark:text-gray-400">Loading...</div>}>
+            {renderPage()}
+          </Suspense>
         </div>
       </MainLayout>
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} themeMode={themeMode} onThemeChange={handleThemeChange} />

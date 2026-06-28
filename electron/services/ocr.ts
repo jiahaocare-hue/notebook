@@ -17,6 +17,17 @@ export interface OCRResult {
   timestamp: string
 }
 
+type OCRWorker = Awaited<ReturnType<typeof Tesseract.createWorker>>
+
+let workerPromise: Promise<OCRWorker> | null = null
+let recognitionQueue: Promise<OCRResult> = Promise.resolve({
+  success: true,
+  text: '',
+  timestamp: new Date().toISOString(),
+})
+let activeProgressWindow: BrowserWindow | null = null
+let workerCleanupRegistered = false
+
 function getTessDataPath(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'resources', 'tessdata')
@@ -109,14 +120,54 @@ async function ensureModelsExist(window: BrowserWindow | null): Promise<string> 
   return tessDataPath
 }
 
-export async function extractText(imagePath: string, window: BrowserWindow | null = null): Promise<OCRResult> {
+async function getWorker(window: BrowserWindow | null): Promise<OCRWorker> {
+  if (!workerPromise) {
+    const tessDataPath = await ensureModelsExist(window)
+
+    workerPromise = Tesseract.createWorker('chi_sim+eng', undefined, {
+      langPath: tessDataPath,
+      cachePath: tessDataPath,
+      gzip: false,
+      logger: (m: { status: string; progress: number }) => {
+        if (m.status === 'recognizing text') {
+          const progress = Math.round(m.progress * 100)
+          sendProgress(activeProgressWindow, 'recognizing', progress, `正在识别文字: ${progress}%`)
+        }
+      }
+    }).then(async worker => {
+      await worker.load()
+      if (!workerCleanupRegistered) {
+        workerCleanupRegistered = true
+        app.once('before-quit', () => {
+          resetWorker().catch(() => {})
+        })
+      }
+      return worker
+    }).catch(error => {
+      workerPromise = null
+      throw error
+    })
+  }
+
+  return workerPromise
+}
+
+async function resetWorker(): Promise<void> {
+  const worker = await workerPromise?.catch(() => null)
+  workerPromise = null
+  if (worker) {
+    await worker.terminate().catch(() => {})
+  }
+}
+
+async function recognizeImage(imagePath: string, window: BrowserWindow | null): Promise<OCRResult> {
   const timestamp = new Date().toISOString()
-  
+
   try {
-    const absolutePath = path.isAbsolute(imagePath) 
-      ? imagePath 
+    const absolutePath = path.isAbsolute(imagePath)
+      ? imagePath
       : path.join(process.cwd(), imagePath)
-    
+
     if (!fs.existsSync(absolutePath)) {
       return {
         success: false,
@@ -126,32 +177,21 @@ export async function extractText(imagePath: string, window: BrowserWindow | nul
       }
     }
 
-    const tessDataPath = await ensureModelsExist(window)
-    
     let result
     try {
-      const worker = await Tesseract.createWorker('chi_sim+eng', undefined, {
-        langPath: tessDataPath,
-        cachePath: tessDataPath,
-        gzip: false,
-        logger: (m: { status: string; progress: number }) => {
-          if (m.status === 'recognizing text') {
-            const progress = Math.round(m.progress * 100)
-            sendProgress(window, 'recognizing', progress, `正在识别文字: ${progress}%`)
-          }
-        }
-      })
-      
-      await worker.load()
+      activeProgressWindow = window
+      const worker = await getWorker(window)
       result = await worker.recognize(absolutePath)
-      await worker.terminate()
     } catch (tesseractError) {
+      await resetWorker()
       return {
         success: false,
         text: '',
-        error: `OCR worker 初始化失败: ${tesseractError instanceof Error ? tesseractError.message : 'Unknown error'}`,
+        error: `OCR worker 识别失败: ${tesseractError instanceof Error ? tesseractError.message : 'Unknown error'}`,
         timestamp
       }
+    } finally {
+      activeProgressWindow = null
     }
 
     sendProgress(window, 'complete', 100, '识别完成')
@@ -171,4 +211,10 @@ export async function extractText(imagePath: string, window: BrowserWindow | nul
       timestamp
     }
   }
+}
+
+export async function extractText(imagePath: string, window: BrowserWindow | null = null): Promise<OCRResult> {
+  const run = () => recognizeImage(imagePath, window)
+  recognitionQueue = recognitionQueue.then(run, run)
+  return recognitionQueue
 }

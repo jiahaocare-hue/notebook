@@ -12,6 +12,8 @@ interface OCRLog {
   timestamp: string
 }
 
+const OCR_LOG_PAGE_SIZE = 20
+
 type ThemeMode = 'light' | 'dark' | 'system'
 
 interface SettingsModalProps {
@@ -92,25 +94,39 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, themeMod
   const [appVersion, setAppVersion] = useState<string>('')
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [ocrLogs, setOcrLogs] = useState<OCRLog[]>([])
+  const [ocrLogPage, setOcrLogPage] = useState(0)
+  const [ocrLogTotal, setOcrLogTotal] = useState(0)
   const [ocrLogsLoading, setOcrLogsLoading] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
       loadConfig()
-      loadOCRLogs()
+      setOcrLogPage(0)
+      loadOCRLogs(0)
     }
   }, [isOpen])
 
-  const loadOCRLogs = async () => {
+  const loadOCRLogs = async (page = ocrLogPage) => {
     setOcrLogsLoading(true)
     try {
-      const logs = await ocrApi.getLogs(20)
-      setOcrLogs(logs)
+      const result = await ocrApi.getLogs({
+        limit: OCR_LOG_PAGE_SIZE,
+        offset: page * OCR_LOG_PAGE_SIZE,
+      })
+      setOcrLogs(result.logs)
+      setOcrLogTotal(result.total)
+      setOcrLogPage(Math.floor(result.offset / result.limit))
     } catch (error) {
       console.error('Failed to load OCR logs:', error)
     } finally {
       setOcrLogsLoading(false)
     }
+  }
+
+  const handleOCRLogPageChange = (nextPage: number) => {
+    const safePage = Math.max(0, nextPage)
+    setOcrLogPage(safePage)
+    loadOCRLogs(safePage)
   }
 
   const loadConfig = async () => {
@@ -179,17 +195,29 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, themeMod
           verifySSL: llmVerifySSL,
           promptTemplate: llmPromptTemplate === DEFAULT_PROMPT_TEMPLATE ? undefined : llmPromptTemplate || undefined
         })
-        setMessage({ type: 'success', text: '设置已保存，重启应用后生效' })
-        setDataDir(customDataDir || dataDir)
+        setMessage({
+          type: 'success',
+          text: result.requiresRestart
+            ? '设置已保存，数据目录将在重启应用后生效。当前任务和图片仍使用原目录。'
+            : '设置已保存。'
+        })
+        if (result.activeDataDir) {
+          setDataDir(result.activeDataDir)
+        }
       } else {
         setMessage({ type: 'error', text: result.error || '保存失败' })
       }
-    } catch (error) {
+    } catch {
       setMessage({ type: 'error', text: '保存失败' })
     } finally {
       setSaving(false)
     }
   }
+
+  const ocrLogTotalPages = Math.max(1, Math.ceil(ocrLogTotal / OCR_LOG_PAGE_SIZE))
+  const hasPreviousOCRLogPage = ocrLogPage > 0
+  const hasNextOCRLogPage = (ocrLogPage + 1) * OCR_LOG_PAGE_SIZE < ocrLogTotal
+  const llmConfigured = Boolean(llmApiKey && llmBaseUrl)
 
   return (
     <Modal title="设置" isOpen={isOpen} onClose={onClose}>
@@ -199,6 +227,29 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, themeMod
         </div>
       ) : (
         <div className="space-y-6 max-h-[70vh] overflow-y-auto">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-3 py-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400">版本</p>
+              <p className="mt-1 text-sm font-medium text-gray-800 dark:text-gray-200">{appVersion || '-'}</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-3 py-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400">数据目录</p>
+              <p className="mt-1 truncate text-sm font-medium text-gray-800 dark:text-gray-200" title={customDataDir || dataDir}>
+                {customDataDir && customDataDir !== dataDir ? '待重启切换' : '当前生效'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-3 py-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400">LLM</p>
+              <p className={`mt-1 text-sm font-medium ${llmConfigured ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                {llmConfigured ? '已配置' : '未完整配置'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-3 py-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400">OCR 日志</p>
+              <p className="mt-1 text-sm font-medium text-gray-800 dark:text-gray-200">{ocrLogTotal} 条</p>
+            </div>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               关于
@@ -276,6 +327,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, themeMod
             <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
               数据库和图片将存储在此目录中。修改后需要重启应用才能生效。
             </p>
+            {customDataDir && customDataDir !== dataDir && (
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                已选择新的数据目录，保存后会在下次启动时使用；当前窗口仍使用当前目录。
+              </p>
+            )}
           </div>
 
           <div>
@@ -404,7 +460,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, themeMod
                 OCR 执行日志
               </label>
               <button
-                onClick={loadOCRLogs}
+                onClick={() => loadOCRLogs(ocrLogPage)}
                 disabled={ocrLogsLoading}
                 className="text-xs text-blue-500 hover:text-blue-600 disabled:text-gray-400"
               >
@@ -449,6 +505,31 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, themeMod
                   ))}
                 </div>
               )}
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+              <span>
+                {ocrLogTotal === 0
+                  ? '0 / 0'
+                  : `${ocrLogPage + 1} / ${ocrLogTotalPages} · ${ocrLogTotal} 条`}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleOCRLogPageChange(ocrLogPage - 1)}
+                  disabled={!hasPreviousOCRLogPage || ocrLogsLoading}
+                  className="px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  上一页
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOCRLogPageChange(ocrLogPage + 1)}
+                  disabled={!hasNextOCRLogPage || ocrLogsLoading}
+                  className="px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  下一页
+                </button>
+              </div>
             </div>
             <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
               显示最近 20 条 OCR 执行记录。如果日志显示成功但搜索无结果，可能是图片中没有可识别的文字。

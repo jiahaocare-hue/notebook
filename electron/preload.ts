@@ -1,143 +1,37 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  ElectronAPI,
+  HybridSearchResult,
+  ImageOCRInfo,
+  NewTask,
+  OCRLog,
+  OCRLogsPage,
+  SearchOptions,
+  SearchResult,
+  SemanticSearchResult,
+  SummaryRequest,
+  SummaryStatsFilters,
+  Task,
+  TaskFilters,
+  TaskHistory,
+  TaskStats,
+  UpdateTask,
+} from '../src/types'
 
-export interface Task {
-  id: number
-  title: string
-  description: string | null
-  status: string
-  priority: string
-  due_date: string | null
-  parent_id: number | null
-  sort_order: number
-  created_at: string
-  updated_at: string
-}
-
-export interface NewTask {
-  title: string
-  description?: string
-  status?: string
-  priority?: string
-  due_date?: string
-  parent_id?: number
-}
-
-export interface UpdateTask {
-  title?: string
-  description?: string
-  status?: string
-  priority?: string
-  due_date?: string
-  parent_id?: number | null
-  sort_order?: number
-}
-
-export interface TaskHistory {
-  id: number
-  task_id: number
-  action: string
-  old_value: string | null
-  new_value: string | null
-  timestamp: string
-}
-
-export interface TaskFilters {
-  date?: string
-  status?: string
-  startDate?: string
-  endDate?: string
-  dateFilterMode?: string
-}
-
-export interface SearchOptions {
-  fields?: string[]
-  limit?: number
-  startDate?: string
-  endDate?: string
-}
-
-export interface SemanticSearchResult extends Task {
-  similarity: number
-}
-
-export interface HybridSearchResult extends Task {
-  similarity: number
-  keywordMatch: number
-  combinedScore: number
-}
-
-export interface SearchResult<T> {
-  error?: string
-  tasks: T[]
-}
-
-export interface TaskStats {
-  total: number
-  completed: number
-  inProgress: number
-  pending: number
-  cancelled: number
-  completionRate: number
-  avgCompletionTime?: number
-  priorityDistribution: {
-    high: number
-    medium: number
-    low: number
-  }
-  monthlyDistribution: { month: string; count: number }[]
-}
-
-export interface CompletedTask {
-  title: string
-  description: string | null
-  priority: string
-  completedAt?: string
-}
-
-export interface SummaryRequest {
-  stats: TaskStats
-  completedTasks: CompletedTask[]
-  timeRange?: {
-    startDate: string
-    endDate: string
-  }
-  summaryType?: 'weekly' | 'yearly'
-  pendingTasks?: CompletedTask[]
-  inProgressTasks?: CompletedTask[]
-}
-
-export interface ImageOCRInfo {
-  id: number
-  task_id: number
-  image_path: string
-  text_content: string | null
-  ocr_status: string
-  ocr_error: string | null
-  ocr_timestamp: string | null
-  created_at: string
-}
-
-export interface OCRLog {
-  id: number
-  task_id: number | null
-  image_path: string | null
-  status: string
-  message: string | null
-  error: string | null
-  timestamp: string
-}
-
-contextBridge.exposeInMainWorld('electronAPI', {
+const electronAPI: ElectronAPI = {
   createTask: (task: NewTask): Promise<number> => ipcRenderer.invoke('task:create', task),
   updateTask: (taskId: number, task: UpdateTask): Promise<boolean> => ipcRenderer.invoke('task:update', taskId, task),
   deleteTask: (taskId: number): Promise<boolean> => ipcRenderer.invoke('task:delete', taskId),
   getTask: (taskId: number): Promise<Task | undefined> => ipcRenderer.invoke('task:get', taskId),
+  getTasks: (taskIds: number[]): Promise<Task[]> => ipcRenderer.invoke('task:getMany', taskIds),
   listTasks: (filters?: TaskFilters): Promise<Task[]> => ipcRenderer.invoke('task:list', filters),
   listTasksWithHistory: (filters?: { startDate?: string; endDate?: string; dateFilterMode?: string }): Promise<(Task & { history: TaskHistory[] })[]> => ipcRenderer.invoke('task:listWithHistory', filters),
   getCounts: (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }): Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }> => ipcRenderer.invoke('task:getCounts', filters),
+  getSummaryStats: (filters?: SummaryStatsFilters): Promise<TaskStats> => ipcRenderer.invoke('task:getSummaryStats', filters),
   getEarliestTaskDate: (): Promise<string> => ipcRenderer.invoke('task:earliest-date'),
   listSubtasks: (parentId: number): Promise<Task[]> => ipcRenderer.invoke('task:listSubtasks', parentId),
   getSubtaskCounts: (taskId: number): Promise<{ total: number; completed: number }> => ipcRenderer.invoke('task:getSubtaskCounts', taskId),
+  getSubtaskCountsBatch: (taskIds: number[]): Promise<Record<number, { total: number; completed: number }>> => ipcRenderer.invoke('task:getSubtaskCountsBatch', taskIds),
   getActivityTimeline: (taskId: number, options?: { limit?: number; offset?: number }): Promise<{ id: number; task_id: number; action: string; old_value: string | null; new_value: string | null; timestamp: string; source_task_id: number; source_task_title: string; source_parent_id: number | null }[]> => ipcRenderer.invoke('task:getActivityTimeline', taskId, options),
 
   getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }): Promise<TaskHistory[]> => ipcRenderer.invoke('history:getByTaskId', taskId, options),
@@ -157,7 +51,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchImage: (query: string, options?: { limit?: number; startDate?: string; endDate?: string }): Promise<Task[]> => ipcRenderer.invoke('search:image', query, options),
 
   getConfig: (): Promise<{ dataDir: string; customDataDir: string | null }> => ipcRenderer.invoke('config:get'),
-  setDataDir: (dataDir: string | null): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('config:setDataDir', dataDir),
+  setDataDir: (dataDir: string | null): Promise<{ success: boolean; error?: string; requiresRestart?: boolean; activeDataDir?: string; pendingDataDir?: string }> => ipcRenderer.invoke('config:setDataDir', dataDir),
   openDirectoryDialog: (): Promise<{ canceled: boolean; filePath: string | null }> => ipcRenderer.invoke('dialog:openDirectory'),
   focusWindow: (): Promise<boolean> => ipcRenderer.invoke('window:focus'),
   showConfirmDialog: (message: string): Promise<boolean> => ipcRenderer.invoke('dialog:confirm', message),
@@ -183,8 +77,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   getTaskImageOCRInfo: (taskId: number): Promise<ImageOCRInfo[]> => ipcRenderer.invoke('ocr:getTaskImageInfo', taskId),
-  getOCRLogs: (limit?: number): Promise<OCRLog[]> => ipcRenderer.invoke('ocr:getLogs', limit),
+  getOCRLogs: (options?: number | { limit?: number; offset?: number }): Promise<OCRLog[] | OCRLogsPage> => ipcRenderer.invoke('ocr:getLogs', options),
   retryOCR: (taskId: number, imagePath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('ocr:retry', taskId, imagePath),
 
   openLogFolder: (): Promise<{ success: boolean }> => ipcRenderer.invoke('log:openFolder'),
-})
+}
+
+contextBridge.exposeInMainWorld('electronAPI', electronAPI)

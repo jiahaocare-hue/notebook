@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import { Task, SearchMode, NewTask, UpdateTask } from '../../types'
 import { searchByMode, taskApi } from '../../ipc/tasks'
 import { useTaskContext } from '../../context/TaskContext'
@@ -27,9 +27,30 @@ const Search: React.FC = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [taskToDelete, setTaskToDelete] = useState<number | null>(null)
   const [parentTaskCache, setParentTaskCache] = useState<Record<number, Task>>({})
+  const searchRequestSeq = useRef(0)
 
   const loadParentTasks = useCallback(async (tasks: Task[]) => {
     const parentIds = tasks.filter(t => t.parent_id !== null).map(t => t.parent_id!).filter((v, i, a) => a.indexOf(v) === i)
+    if (parentIds.length === 0) {
+      return
+    }
+
+    try {
+      const parents = await taskApi.getMany(parentIds.filter(id => !parentTaskCache[id]))
+      if (parents.length > 0) {
+        setParentTaskCache(prev => {
+          const next = { ...prev }
+          for (const parent of parents) {
+            next[parent.id] = parent
+          }
+          return next
+        })
+      }
+      return
+    } catch {
+      // Fall back to per-parent loading if the batch IPC is unavailable.
+    }
+
     const newParents: Record<number, Task> = { ...parentTaskCache }
     for (const parentId of parentIds) {
       if (!newParents[parentId]) {
@@ -38,7 +59,7 @@ const Search: React.FC = () => {
           if (parent) {
             newParents[parentId] = parent
           }
-        } catch (err) {
+        } catch {
           // 忽略
         }
       }
@@ -47,8 +68,11 @@ const Search: React.FC = () => {
   }, [parentTaskCache])
 
   const handleSearch = useCallback(async () => {
-    if (!query.trim()) return
+    const trimmedQuery = query.trim()
+    if (!trimmedQuery) return
 
+    const requestId = searchRequestSeq.current + 1
+    searchRequestSeq.current = requestId
     setLoading(true)
     setError(null)
     setHasSearched(true)
@@ -63,12 +87,8 @@ const Search: React.FC = () => {
         options.endDate = endDate
       }
 
-      console.log('[Search] handleSearch called')
-      console.log('[Search] startDate:', startDate, 'endDate:', endDate)
-      console.log('[Search] options:', options)
-
-      const result = await searchByMode(query, mode, options)
-      console.log('[Search] result:', result)
+      const result = await searchByMode(trimmedQuery, mode, options)
+      if (requestId !== searchRequestSeq.current) return
 
       if (result.error) {
         setError(result.error)
@@ -79,11 +99,14 @@ const Search: React.FC = () => {
         loadParentTasks(tasks)
       }
     } catch (err) {
+      if (requestId !== searchRequestSeq.current) return
       console.error('Search failed:', err)
       setError('搜索失败，请重试')
       setResults([])
     } finally {
-      setLoading(false)
+      if (requestId === searchRequestSeq.current) {
+        setLoading(false)
+      }
     }
   }, [query, mode, startDate, endDate, loadParentTasks])
 
@@ -96,7 +119,7 @@ const Search: React.FC = () => {
           setSelectedTask(parentTask)
           setShowDetailModal(true)
         }
-      } catch (err) {
+      } catch {
         // 如果获取父任务失败，直接打开子任务
         setSelectedTask(task)
         setShowDetailModal(true)
@@ -164,16 +187,6 @@ const Search: React.FC = () => {
     }
   }
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && query.trim()) {
-        handleSearch()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [query, handleSearch])
-
   return (
     <div className="flex-1 overflow-auto p-6">
       <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6">搜索任务</h2>
@@ -185,6 +198,11 @@ const Search: React.FC = () => {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleSearch()
+                }
+              }}
               placeholder="输入搜索内容..."
               className="w-full px-4 py-3 pl-10 border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all"
             />

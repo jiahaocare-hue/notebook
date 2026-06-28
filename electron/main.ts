@@ -1,16 +1,38 @@
-import { app, BrowserWindow, ipcMain, Menu, clipboard, nativeImage, dialog, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell, protocol } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import Database from 'better-sqlite3'
-import { generateEmbedding, cosineSimilarity } from './services/embedding'
+import { generateEmbedding } from './services/embedding'
 import { extractText } from './services/ocr'
-import { generateSummary, SummaryRequest } from './services/llm'
-import { autoUpdater } from 'electron-updater'
+import { getDataDir } from './services/config'
+import { backupDatabaseIfNeeded, cleanupDanglingDatabaseReferences, ensureMigrationTable, runDatabaseMigration } from './services/database'
+import { ensureImagesDir, extractLocalImagePaths, resolveImageFilePath as resolveImageFilePathInDir } from './services/images'
 import { logger } from './services/logger'
+import { registerAppHandlers, registerAutoUpdaterLifecycle } from './ipc/app'
+import { registerConfigHandlers } from './ipc/config'
+import { registerDialogHandlers } from './ipc/dialogs'
+import { registerFileHandlers } from './ipc/files'
+import { registerImageHandlers } from './ipc/imageHandlers'
+import { registerLlmHandlers } from './ipc/llm'
+import { registerOcrHandlers } from './ipc/ocr'
+import { registerSearchHandlers } from './ipc/search'
+import { registerTaskHandlers } from './ipc/tasks'
 
 let mainWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
-let manualUpdateCheck = false
+let activeDataDir: string | null = null
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app-image',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true
+    }
+  }
+])
 const isDev = !app.isPackaged
 
 process.on('uncaughtException', (error) => {
@@ -36,6 +58,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      devTools: isDev,
     },
     title: 'Task Manager',
     show: false,
@@ -54,6 +80,24 @@ function createWindow() {
     mainWindow?.focus()
   })
 
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalUrl(url)) {
+      shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isAllowedAppUrl(url)) {
+      return
+    }
+
+    event.preventDefault()
+    if (isAllowedExternalUrl(url)) {
+      shell.openExternal(url)
+    }
+  })
+
   Menu.setApplicationMenu(null)
 
   mainWindow.on('closed', () => {
@@ -61,74 +105,48 @@ function createWindow() {
   })
 }
 
-function getConfigPath(): string {
-  const userDataPath = app.getPath('userData')
-  return path.join(userDataPath, 'config.json')
-}
-
-interface LLMConfig {
-  apiKey?: string
-  baseUrl?: string
-  model?: string
-  timeout?: number
-  verifySSL?: boolean
-  promptTemplate?: string
-}
-
-interface AppConfig {
-  dataDir?: string
-  llm?: LLMConfig
-}
-
-function loadConfig(): AppConfig {
+function isAllowedAppUrl(url: string): boolean {
   try {
-    const configPath = getConfigPath()
-    if (fs.existsSync(configPath)) {
-      const content = fs.readFileSync(configPath, 'utf-8')
-      return JSON.parse(content)
+    const parsed = new URL(url)
+    if (isDev) {
+      return parsed.protocol === 'http:' && parsed.hostname === 'localhost' && parsed.port === '5173'
     }
-  } catch (error) {
-    logger.error('Failed to load config:', error)
-  }
-  return {}
-}
-
-function saveConfig(config: AppConfig): boolean {
-  try {
-    const configPath = getConfigPath()
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
-    return true
-  } catch (error) {
-    logger.error('Failed to save config:', error)
+    return parsed.protocol === 'file:'
+  } catch {
     return false
   }
 }
 
-function getDataDir(): string {
-  const config = loadConfig()
-  if (config.dataDir && fs.existsSync(config.dataDir)) {
-    return config.dataDir
+function isAllowedExternalUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:'
+  } catch {
+    return false
   }
-  
-  if (isDev) {
-    return path.join(__dirname, '..', 'data')
-  }
-  return path.join(app.getPath('userData'), 'data')
+}
+
+function getActiveDataDir(): string {
+  return activeDataDir || getDataDir(isDev, __dirname)
 }
 
 function initDatabase() {
   try {
-    const dataDir = getDataDir()
+    const dataDir = getDataDir(isDev, __dirname)
+    activeDataDir = dataDir
     const dbPath = path.join(dataDir, 'tasks.db')
     
     const dbDir = path.dirname(dbPath)
     if (!fs.existsSync(dbDir)) {
       fs.mkdirSync(dbDir, { recursive: true })
     }
+
+    backupDatabaseIfNeeded(dbPath)
     
     db = new Database(dbPath)
     
     db.exec('PRAGMA foreign_keys = OFF')
+    ensureMigrationTable(db)
 
     db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (
@@ -180,6 +198,7 @@ function initDatabase() {
         FOREIGN KEY (task_id) REFERENCES tasks(id)
       )
     `)
+    runDatabaseMigration(db, '001_core_task_tables', 'Record core task, history, embedding, and image table baseline', () => {})
     
     try {
       db.exec(`ALTER TABLE image_texts ADD COLUMN task_id_temp INTEGER`)
@@ -198,9 +217,11 @@ function initDatabase() {
       db.exec(`INSERT INTO image_texts_new SELECT id, task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp, created_at FROM image_texts`)
       db.exec(`DROP TABLE image_texts`)
       db.exec(`ALTER TABLE image_texts_new RENAME TO image_texts`)
-    } catch (e) {
+    } catch {
       // 表结构已经是正确的，忽略错误
     }
+
+    runDatabaseMigration(db, '002_image_texts_fk_shape', 'Record image_texts foreign key shape baseline', () => {})
 
     db.exec(`
       CREATE TABLE IF NOT EXISTS ocr_logs (
@@ -213,6 +234,7 @@ function initDatabase() {
         timestamp TEXT DEFAULT CURRENT_TIMESTAMP
       )
     `)
+    runDatabaseMigration(db, '003_ocr_logs_table', 'Record OCR logs table baseline', () => {})
 
     const imageTextsInfo = db.prepare('PRAGMA table_info(image_texts)').all() as { name: string }[]
     const existingColumns = imageTextsInfo.map(col => col.name)
@@ -228,6 +250,8 @@ function initDatabase() {
     }
 
     // 迁移：为 tasks 表新增 parent_id 和 sort_order 字段
+    runDatabaseMigration(db, '004_image_texts_ocr_columns', 'Record image_texts OCR column baseline', () => {})
+
     const tasksInfo = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
     const taskColumns = tasksInfo.map(col => col.name)
     if (!taskColumns.includes('parent_id')) {
@@ -235,6 +259,29 @@ function initDatabase() {
     }
     if (!taskColumns.includes('sort_order')) {
       db.exec('ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0')
+    }
+
+    runDatabaseMigration(db, '005_tasks_hierarchy_columns', 'Record task hierarchy column baseline', () => {})
+
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_parent_sort ON tasks(parent_id, sort_order, created_at);
+      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+      CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
+      CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at);
+      CREATE INDEX IF NOT EXISTS idx_task_history_task_timestamp ON task_history(task_id, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_task_embeddings_task ON task_embeddings(task_id);
+      CREATE INDEX IF NOT EXISTS idx_image_texts_task_path ON image_texts(task_id, image_path);
+      CREATE INDEX IF NOT EXISTS idx_ocr_logs_timestamp ON ocr_logs(timestamp);
+    `)
+
+    runDatabaseMigration(db, '006_common_indexes', 'Record common index baseline', () => {})
+
+    cleanupDanglingDatabaseReferences(db)
+    db.exec('PRAGMA foreign_keys = ON')
+
+    const foreignKeyIssues = db.prepare('PRAGMA foreign_key_check').all()
+    if (foreignKeyIssues.length > 0) {
+      logger.warn('[Database] Foreign key check found issues:', foreignKeyIssues)
     }
   } catch (error) {
     logger.error('Failed to initialize database:', error)
@@ -253,6 +300,7 @@ async function backfillEmbeddings() {
       if (Array.isArray(parsed) && parsed.length !== EXPECTED_DIMENSION) {
         logger.info(`[Migration] Embedding dimension mismatch: ${parsed.length} != ${EXPECTED_DIMENSION}, regenerating all embeddings...`)
         db?.exec('DELETE FROM task_embeddings')
+        embeddingVectorCache.clear()
       }
     }
     
@@ -275,7 +323,7 @@ async function backfillEmbeddings() {
   }
 }
 
-async function backfillImageTexts() {
+async function _backfillImageTexts() {
   try {
     const tasksWithImages = db?.prepare(`
       SELECT t.id as task_id, t.description 
@@ -287,9 +335,6 @@ async function backfillImageTexts() {
       return
     }
 
-    const imagesDir = getImagesDir()
-    let processedCount = 0
-    
     for (const task of tasksWithImages) {
       const imageMatches = [...task.description.matchAll(/!\[.*?\]\(([^)]+)\)/g)]
       
@@ -308,11 +353,9 @@ async function backfillImageTexts() {
           continue
         }
         
-        const fullPath = path.join(imagesDir, imagePath)
-        
-        if (fs.existsSync(fullPath)) {
-          processedCount++
-          const ocrResult = await extractText(fullPath, mainWindow)
+        const resolvedPath = resolveImageFilePath(imagePath)
+        if (resolvedPath.success && fs.existsSync(resolvedPath.fullPath)) {
+          const ocrResult = await extractText(resolvedPath.fullPath, mainWindow)
           
           db?.prepare('INSERT INTO ocr_logs (task_id, image_path, status, message, error) VALUES (?, ?, ?, ?, ?)').run(
             task.task_id,
@@ -348,11 +391,6 @@ async function backfillImageTexts() {
   }
 }
 
-function addHistoryRecord(taskId: number, action: string, oldValue: string | null, newValue: string | null) {
-  const stmt = db?.prepare('INSERT INTO task_history (task_id, action, old_value, new_value) VALUES (?, ?, ?, ?)')
-  stmt?.run(taskId, action, oldValue, newValue)
-}
-
 async function updateTaskEmbedding(taskId: number, title: string, description: string | null) {
   try {
     const text = description ? `${title} ${description}` : title
@@ -365,6 +403,7 @@ async function updateTaskEmbedding(taskId: number, title: string, description: s
     } else {
       db?.prepare('INSERT INTO task_embeddings (task_id, embedding) VALUES (?, ?)').run(taskId, JSON.stringify(embedding))
     }
+    embeddingVectorCache.delete(taskId)
   } catch (error) {
     logger.error('Failed to update embedding:', error)
   }
@@ -372,64 +411,22 @@ async function updateTaskEmbedding(taskId: number, title: string, description: s
 
 app.whenReady().then(async () => {
   initDatabase()
+  registerImageProtocol()
   createWindow()
   
   setTimeout(async () => {
     try {
       await backfillEmbeddings()
+      if (db) {
+        cleanupDanglingDatabaseReferences(db)
+      }
+      cleanupOrphanImageFiles()
     } catch (error) {
       logger.error('Failed to backfill data:', error)
     }
   }, 1000)
 
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
-
-  autoUpdater.on('update-available', (info) => {
-    dialog.showMessageBox(mainWindow!, {
-      type: 'info',
-      title: '发现新版本',
-      message: `发现新版本 ${info.version}，是否前往下载？`,
-      buttons: ['前往下载', '稍后提醒'],
-      defaultId: 0,
-      cancelId: 1
-    }).then((result) => {
-      if (result.response === 0) {
-        shell.openExternal('https://github.com/jiahaocare-hue/notebook/releases/latest')
-      }
-    })
-  })
-
-  autoUpdater.on('update-not-available', () => {
-    if (manualUpdateCheck) {
-      dialog.showMessageBox(mainWindow!, {
-        type: 'info',
-        title: '检查更新',
-        message: '当前已是最新版本',
-        buttons: ['确定']
-      })
-      manualUpdateCheck = false
-    }
-  })
-
-  autoUpdater.on('error', (error) => {
-    logger.error('Auto updater error:', error)
-    if (manualUpdateCheck) {
-      dialog.showMessageBox(mainWindow!, {
-        type: 'error',
-        title: '检查更新失败',
-        message: '检查更新时发生错误，请稍后重试',
-        buttons: ['确定']
-      })
-      manualUpdateCheck = false
-    }
-  })
-
-  if (!isDev) {
-    setTimeout(() => {
-      autoUpdater.checkForUpdates()
-    }, 3000)
-  }
+  registerAutoUpdaterLifecycle({ isDev, getMainWindow: () => mainWindow })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -445,1096 +442,143 @@ app.on('window-all-closed', () => {
   }
 })
 
-ipcMain.handle('task:create', async (_event, task: { title: string; description?: string; status?: string; priority?: string; due_date?: string; parent_id?: number; sort_order?: number }) => {
-  const stmt = db?.prepare('INSERT INTO tasks (title, description, status, priority, due_date, parent_id, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)')
-  const result = stmt?.run(task.title, task.description || null, task.status || 'in_progress', task.priority || 'medium', task.due_date || null, task.parent_id !== undefined ? task.parent_id : null, task.sort_order || 0)
-  const taskId = result?.lastInsertRowid as number
+const embeddingVectorCache = new Map<number, { source: string; vector: number[] }>()
 
-  if (taskId) {
-    addHistoryRecord(taskId, 'created', null, JSON.stringify({ title: task.title, description: task.description, status: task.status || 'in_progress', priority: task.priority || 'medium', due_date: task.due_date, parent_id: task.parent_id !== undefined ? task.parent_id : null }))
-    updateTaskEmbedding(taskId, task.title, task.description || null).catch(err => logger.error('Failed to generate embedding:', err))
-
-    if (task.description) {
-      const imageMatches = [...task.description.matchAll(/!\[.*?\]\(local:\/\/([^)]+)\)/g)]
-      for (const match of imageMatches) {
-        const imagePath = match[1]
-        db?.prepare('UPDATE image_texts SET task_id = ? WHERE image_path = ? AND (task_id IS NULL OR task_id = 0)').run(taskId, imagePath)
-      }
-    }
+function parseEmbeddingVector(taskId: number, embedding: string): number[] {
+  const cached = embeddingVectorCache.get(taskId)
+  if (cached?.source === embedding) {
+    return cached.vector
   }
 
-  return taskId
-})
-
-ipcMain.handle('task:update', async (_event, taskId: number, task: { title?: string; description?: string; status?: string; priority?: string; due_date?: string; parent_id?: number | null; sort_order?: number }) => {
-  const getStmt = db?.prepare('SELECT * FROM tasks WHERE id = ?')
-  const oldTask = getStmt?.get(taskId) as { title: string; description: string; status: string; priority: string; due_date: string | null; parent_id: number | null; sort_order: number } | undefined
-
-  if (!oldTask) {
-    return false
-  }
-
-  const updates: string[] = []
-  const values: (string | null)[] = []
-  const changes: { old: Record<string, unknown>; new: Record<string, unknown> } = { old: {}, new: {} }
-
-  if (task.title !== undefined && task.title !== oldTask.title) {
-    updates.push('title = ?')
-    values.push(task.title)
-    changes.old.title = oldTask.title
-    changes.new.title = task.title
-  }
-
-  if (task.description !== undefined && task.description !== oldTask.description) {
-    updates.push('description = ?')
-    values.push(task.description)
-    changes.old.description = oldTask.description
-    changes.new.description = task.description
-  }
-
-  if (task.status !== undefined && task.status !== oldTask.status) {
-    updates.push('status = ?')
-    values.push(task.status)
-    changes.old.status = oldTask.status
-    changes.new.status = task.status
-  }
-
-  if (task.priority !== undefined && task.priority !== oldTask.priority) {
-    updates.push('priority = ?')
-    values.push(task.priority)
-    changes.old.priority = oldTask.priority
-    changes.new.priority = task.priority
-  }
-
-  if (task.due_date !== undefined && task.due_date !== oldTask.due_date) {
-    updates.push('due_date = ?')
-    values.push(task.due_date || null)
-    changes.old.due_date = oldTask.due_date
-    changes.new.due_date = task.due_date
-  }
-
-  if (task.parent_id !== undefined && task.parent_id !== oldTask.parent_id) {
-    updates.push('parent_id = ?')
-    values.push(task.parent_id === null ? null : String(task.parent_id))
-    changes.old.parent_id = oldTask.parent_id
-    changes.new.parent_id = task.parent_id
-  }
-
-  if (task.sort_order !== undefined && task.sort_order !== oldTask.sort_order) {
-    updates.push('sort_order = ?')
-    values.push(String(task.sort_order))
-    changes.old.sort_order = oldTask.sort_order
-    changes.new.sort_order = task.sort_order
-  }
-
-  if (updates.length === 0) {
-    return true
-  }
-
-  updates.push('updated_at = CURRENT_TIMESTAMP')
-  values.push(String(taskId))
-
-  const updateStmt = db?.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`)
-  updateStmt?.run(...values)
-
-  const action = task.status !== undefined && task.status !== oldTask.status ? 'status_changed' : 'updated'
-  logger.info('[task:update] Adding history record, action:', action, 'changes:', JSON.stringify(changes))
-  addHistoryRecord(taskId, action, JSON.stringify(changes.old), JSON.stringify(changes.new))
-
-  if (task.title !== undefined || task.description !== undefined) {
-    const newTitle = task.title !== undefined ? task.title : oldTask.title
-    const newDescription = task.description !== undefined ? task.description : oldTask.description
-    updateTaskEmbedding(taskId, newTitle, newDescription).catch(err => logger.error('Failed to generate embedding:', err))
-  }
-
-  return true
-})
-
-ipcMain.handle('task:delete', (_event, taskId: number) => {
-  try {
-    const getStmt = db?.prepare('SELECT * FROM tasks WHERE id = ?')
-    const task = getStmt?.get(taskId) as { id: number; description: string | null; parent_id: number | null } | undefined
-
-    if (!task) {
-      return false
-    }
-
-    const imagesDir = getImagesDir()
-    const imageFiles: string[] = []
-
-    if (task.description) {
-      const imageMatches = [...task.description.matchAll(/!\[.*?\]\(local:\/\/([^)]+)\)/g)]
-      for (const match of imageMatches) {
-        imageFiles.push(match[1])
-      }
-    }
-
-    try {
-      const deleteTransaction = db?.transaction(() => {
-        // 递归收集所有子任务 ID
-        const collectSubtaskIds = (parentId: number): number[] => {
-          const subtasks = db?.prepare('SELECT id FROM tasks WHERE parent_id = ?').all(parentId) as { id: number }[] || []
-          let ids: number[] = []
-          for (const subtask of subtasks) {
-            ids.push(subtask.id)
-            ids = ids.concat(collectSubtaskIds(subtask.id))
-          }
-          return ids
-        }
-
-        const subtaskIds = collectSubtaskIds(taskId)
-        const allIdsToDelete = [taskId, ...subtaskIds]
-
-        db?.exec('PRAGMA foreign_keys = OFF')
-        try {
-          for (const id of allIdsToDelete) {
-            // 收集子任务的图片引用
-            const subtask = db?.prepare('SELECT description FROM tasks WHERE id = ?').get(id) as { description: string | null } | undefined
-            if (subtask?.description) {
-              const subImageMatches = [...subtask.description.matchAll(/!\[.*?\]\(local:\/\/([^)]+)\)/g)]
-              for (const match of subImageMatches) {
-                imageFiles.push(match[1])
-              }
-            }
-            db?.prepare('DELETE FROM task_embeddings WHERE task_id = ?').run(id)
-            db?.prepare('DELETE FROM task_history WHERE task_id = ?').run(id)
-            db?.prepare('DELETE FROM image_texts WHERE task_id = ?').run(id)
-            db?.prepare('DELETE FROM tasks WHERE id = ?').run(id)
-          }
-        } catch (innerError) {
-          logger.error('Database transaction error during task deletion:', innerError)
-          throw innerError
-        } finally {
-          db?.exec('PRAGMA foreign_keys = ON')
-        }
-      })
-
-      deleteTransaction?.()
-    } catch (transactionError) {
-      logger.error('Failed to delete task from database:', transactionError)
-      return false
-    }
-
-    for (const imageFile of imageFiles) {
-      const fullPath = path.join(imagesDir, imageFile)
-      if (fs.existsSync(fullPath)) {
-        try {
-          fs.unlinkSync(fullPath)
-        } catch (e) {
-          logger.error('Failed to delete image file:', fullPath, e)
-        }
-      }
-    }
-
-    return true
-  } catch (error) {
-    logger.error('Failed to delete task:', error)
-    return false
-  }
-})
-
-ipcMain.handle('task:get', (_event, taskId: number) => {
-  const stmt = db?.prepare('SELECT * FROM tasks WHERE id = ?')
-  return stmt?.get(taskId)
-})
-
-ipcMain.handle('task:list', (_event, filters?: { date?: string; status?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => {
-  let sql = 'SELECT * FROM tasks WHERE 1=1 AND parent_id IS NULL'
-  const params: string[] = []
-  const dateField = filters?.dateFilterMode === 'updated' ? 'updated_at'
-    : filters?.dateFilterMode === 'created_or_updated' ? null
-    : 'created_at'
-
-  if (filters?.date) {
-    if (dateField) {
-      sql += ` AND date(${dateField}, 'localtime') = ?`
-      params.push(filters.date)
-    } else {
-      sql += ` AND (date(created_at, 'localtime') = ? OR date(updated_at, 'localtime') = ?)`
-      params.push(filters.date, filters.date)
-    }
-  }
-
-  if (filters?.status) {
-    sql += ' AND status = ?'
-    params.push(filters.status)
-  }
-
-  if (filters?.startDate && filters?.endDate) {
-    if (dateField) {
-      sql += ` AND date(${dateField}, 'localtime') >= ? AND date(${dateField}, 'localtime') <= ?`
-      params.push(filters.startDate, filters.endDate)
-    } else {
-      sql += ` AND ((date(created_at, 'localtime') >= ? AND date(created_at, 'localtime') <= ?) OR (date(updated_at, 'localtime') >= ? AND date(updated_at, 'localtime') <= ?))`
-      params.push(filters.startDate, filters.endDate, filters.startDate, filters.endDate)
-    }
-  } else if (filters?.startDate) {
-    if (dateField) {
-      sql += ` AND date(${dateField}, 'localtime') >= ?`
-      params.push(filters.startDate)
-    } else {
-      sql += ` AND (date(created_at, 'localtime') >= ? OR date(updated_at, 'localtime') >= ?)`
-      params.push(filters.startDate, filters.startDate)
-    }
-  } else if (filters?.endDate) {
-    if (dateField) {
-      sql += ` AND date(${dateField}, 'localtime') <= ?`
-      params.push(filters.endDate)
-    } else {
-      sql += ` AND (date(created_at, 'localtime') <= ? OR date(updated_at, 'localtime') <= ?)`
-      params.push(filters.endDate, filters.endDate)
-    }
-  }
-
-  sql += ' ORDER BY created_at DESC'
-
-  const stmt = db?.prepare(sql)
-  return stmt?.all(...params) || []
-})
-
-ipcMain.handle('task:listWithHistory', (_event, filters?: { startDate?: string; endDate?: string; dateFilterMode?: string }) => {
-  let sql = 'SELECT * FROM tasks WHERE 1=1 AND parent_id IS NULL'
-  const params: string[] = []
-  const dateField = filters?.dateFilterMode === 'updated' ? 'updated_at'
-    : filters?.dateFilterMode === 'created_or_updated' ? null
-    : 'created_at'
-
-  if (filters?.startDate && filters?.endDate) {
-    if (dateField) {
-      sql += ` AND date(${dateField}, 'localtime') >= ? AND date(${dateField}, 'localtime') <= ?`
-      params.push(filters.startDate, filters.endDate)
-    } else {
-      sql += ` AND ((date(created_at, 'localtime') >= ? AND date(created_at, 'localtime') <= ?) OR (date(updated_at, 'localtime') >= ? AND date(updated_at, 'localtime') <= ?))`
-      params.push(filters.startDate, filters.endDate, filters.startDate, filters.endDate)
-    }
-  } else if (filters?.startDate) {
-    if (dateField) {
-      sql += ` AND date(${dateField}, 'localtime') >= ?`
-      params.push(filters.startDate)
-    } else {
-      sql += ` AND (date(created_at, 'localtime') >= ? OR date(updated_at, 'localtime') >= ?)`
-      params.push(filters.startDate, filters.startDate)
-    }
-  } else if (filters?.endDate) {
-    if (dateField) {
-      sql += ` AND date(${dateField}, 'localtime') <= ?`
-      params.push(filters.endDate)
-    } else {
-      sql += ` AND (date(created_at, 'localtime') <= ? OR date(updated_at, 'localtime') <= ?)`
-      params.push(filters.endDate, filters.endDate)
-    }
-  }
-
-  sql += ' ORDER BY created_at DESC'
-
-  const stmt = db?.prepare(sql)
-  const tasks = stmt?.all(...params) || []
-
-  const historyStmt = db?.prepare('SELECT * FROM task_history WHERE task_id = ? ORDER BY timestamp DESC')
-  return tasks.map((task: any) => ({
-    ...task,
-    history: historyStmt?.all(task.id) || []
-  }))
-})
-
-ipcMain.handle('task:getCounts', (_event, filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => {
-  let sql = 'SELECT status, COUNT(*) as count FROM tasks WHERE parent_id IS NULL'
-  const conditions: string[] = []
-  const params: string[] = []
-  const dateField = filters?.dateFilterMode === 'updated' ? 'updated_at'
-    : filters?.dateFilterMode === 'created_or_updated' ? null
-    : 'created_at'
-
-  if (filters?.date) {
-    if (dateField) {
-      conditions.push(`date(${dateField}, 'localtime') = ?`)
-      params.push(filters.date)
-    } else {
-      conditions.push(`(date(created_at, 'localtime') = ? OR date(updated_at, 'localtime') = ?)`)
-      params.push(filters.date, filters.date)
-    }
-  }
-
-  if (filters?.startDate && filters?.endDate) {
-    if (dateField) {
-      conditions.push(`date(${dateField}, 'localtime') >= ? AND date(${dateField}, 'localtime') <= ?`)
-      params.push(filters.startDate, filters.endDate)
-    } else {
-      conditions.push(`((date(created_at, 'localtime') >= ? AND date(created_at, 'localtime') <= ?) OR (date(updated_at, 'localtime') >= ? AND date(updated_at, 'localtime') <= ?))`)
-      params.push(filters.startDate, filters.endDate, filters.startDate, filters.endDate)
-    }
-  } else if (filters?.startDate) {
-    if (dateField) {
-      conditions.push(`date(${dateField}, 'localtime') >= ?`)
-      params.push(filters.startDate)
-    } else {
-      conditions.push(`(date(created_at, 'localtime') >= ? OR date(updated_at, 'localtime') >= ?)`)
-      params.push(filters.startDate, filters.startDate)
-    }
-  } else if (filters?.endDate) {
-    if (dateField) {
-      conditions.push(`date(${dateField}, 'localtime') <= ?`)
-      params.push(filters.endDate)
-    } else {
-      conditions.push(`(date(created_at, 'localtime') <= ? OR date(updated_at, 'localtime') <= ?)`)
-      params.push(filters.endDate, filters.endDate)
-    }
-  }
-
-  if (conditions.length > 0) {
-    sql += ' AND ' + conditions.join(' AND ')
-  }
-
-  sql += ' GROUP BY status'
-
-  const stmt = db?.prepare(sql)
-  const results = stmt?.all(...params) as { status: string; count: number }[] || []
-
-  const counts = {
-    all: 0,
-    pending: 0,
-    in_progress: 0,
-    completed: 0,
-    cancelled: 0
-  }
-
-  for (const row of results) {
-    counts.all += row.count
-    if (row.status === 'pending') counts.pending = row.count
-    else if (row.status === 'in_progress') counts.in_progress = row.count
-    else if (row.status === 'completed') counts.completed = row.count
-    else if (row.status === 'cancelled') counts.cancelled = row.count
-  }
-
-  return counts
-})
-
-ipcMain.handle('task:earliest-date', () => {
-  const result = db?.prepare("SELECT date(MIN(created_at), 'localtime') as earliest_date FROM tasks WHERE parent_id IS NULL").get() as { earliest_date: string | null } | undefined
-  if (result?.earliest_date) {
-    return result.earliest_date
-  }
-  const today = new Date()
-  const year = today.getFullYear()
-  const month = String(today.getMonth() + 1).padStart(2, '0')
-  const day = String(today.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-})
-
-ipcMain.handle('task:listSubtasks', (_event, parentId: number) => {
-  const stmt = db?.prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY sort_order ASC, created_at ASC')
-  return stmt?.all(parentId) || []
-})
-
-ipcMain.handle('task:getSubtaskCounts', (_event, taskId: number) => {
-  const total = (db?.prepare('SELECT COUNT(*) as count FROM tasks WHERE parent_id = ?').get(taskId) as { count: number } | undefined)?.count || 0
-  const completed = (db?.prepare("SELECT COUNT(*) as count FROM tasks WHERE parent_id = ? AND status = 'completed'").get(taskId) as { count: number } | undefined)?.count || 0
-  return { total, completed }
-})
-
-ipcMain.handle('task:getActivityTimeline', (_event, taskId: number, options?: { limit?: number; offset?: number }) => {
-  const limit = options?.limit ?? 20
-  const offset = options?.offset ?? 0
-
-  // 获取父任务及所有子任务的 ID
-  const subtasks = db?.prepare('SELECT id, title, parent_id FROM tasks WHERE parent_id = ?').all(taskId) as { id: number; title: string; parent_id: number | null }[] || []
-
-  const allTaskIds = [taskId, ...subtasks.map(s => s.id)]
-
-  // 构建参数占位符
-  const placeholders = allTaskIds.map(() => '?').join(',')
-
-  const sql = `SELECT h.*, t.title as task_title, t.parent_id as task_parent_id FROM task_history h LEFT JOIN tasks t ON h.task_id = t.id WHERE h.task_id IN (${placeholders}) ORDER BY h.timestamp DESC LIMIT ? OFFSET ?`
-
-  const stmt = db?.prepare(sql)
-  const records = stmt?.all(...allTaskIds, limit, offset) as any[] || []
-
-  return records.map(record => ({
-    id: record.id,
-    task_id: record.task_id,
-    action: record.action,
-    old_value: record.old_value,
-    new_value: record.new_value,
-    timestamp: record.timestamp,
-    source_task_id: record.task_id,
-    source_task_title: record.task_title || '',
-    source_parent_id: record.task_parent_id ?? null
-  }))
-})
-
-ipcMain.handle('history:getByTaskId', (_event, taskId: number, options?: { limit?: number; offset?: number }) => {
-  const limit = options?.limit ?? 20
-  const offset = options?.offset ?? 0
-  const stmt = db?.prepare('SELECT * FROM task_history WHERE task_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?')
-  return stmt?.all(taskId, limit, offset) || []
-})
-
-ipcMain.handle('history:delete', (_event, historyId: number) => {
-  try {
-    db?.prepare('DELETE FROM task_history WHERE id = ?').run(historyId)
-    return true
-  } catch (error) {
-    logger.error('Failed to delete history record:', error)
-    return false
-  }
-})
-
-ipcMain.handle('history:update', (_event, historyId: number, newValue: string) => {
-  try {
-    db?.prepare('UPDATE task_history SET new_value = ? WHERE id = ?').run(newValue, historyId)
-    return true
-  } catch (error) {
-    logger.error('Failed to update history record:', error)
-    return false
-  }
-})
-
-ipcMain.handle('search:keyword', (_event, query: string, options?: { fields?: string[]; limit?: number; startDate?: string; endDate?: string }) => {
-  const limit = options?.limit || 50
-  
-  logger.info('[search:keyword] Starting search, query:', query)
-  
-  // Debug: check task_history table
-  const historyCount = db?.prepare('SELECT COUNT(*) as count FROM task_history').get() as { count: number } | undefined
-  logger.info('[search:keyword] Task history count:', historyCount?.count || 0)
-  
-  if (historyCount && historyCount.count > 0) {
-    const sampleHistory = db?.prepare('SELECT task_id, action, old_value, new_value FROM task_history LIMIT 5').all() as { task_id: number; action: string; old_value: string | null; new_value: string | null }[]
-    logger.info('[search:keyword] Sample history records:', JSON.stringify(sampleHistory))
-  }
-  
-  let sql = `
-    SELECT DISTINCT t.*
-    FROM tasks t
-    LEFT JOIN task_history h ON t.id = h.task_id
-    WHERE (t.title LIKE ? OR t.description LIKE ? OR (h.old_value IS NOT NULL AND h.old_value LIKE ?) OR (h.new_value IS NOT NULL AND h.new_value LIKE ?))
-  `
-  const params: string[] = [`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`]
-  
-  logger.info('[search:keyword] SQL:', sql)
-  logger.info('[search:keyword] Params:', params)
-
-  if (options?.startDate) {
-    sql += " AND date(t.created_at, 'localtime') >= ?"
-    params.push(options.startDate)
-  }
-
-  if (options?.endDate) {
-    sql += " AND date(t.created_at, 'localtime') <= ?"
-    params.push(options.endDate)
-  }
-
-  sql += ' ORDER BY t.created_at DESC LIMIT ?'
-  params.push(String(limit))
-
-  const stmt = db?.prepare(sql)
-  const results = stmt?.all(...params) || []
-  logger.info('[search:keyword] Results count:', results.length)
-  return results
-})
-
-ipcMain.handle('search:semantic', async (_event, query: string, options?: { limit?: number; threshold?: number; startDate?: string; endDate?: string }) => {
-  const limit = options?.limit || 50
-  const threshold = options?.threshold || 0.7
-
-  try {
-    const queryEmbedding = await generateEmbedding(query)
-
-    let sql = `
-      SELECT t.*, e.embedding 
-      FROM tasks t 
-      LEFT JOIN task_embeddings e ON t.id = e.task_id 
-      WHERE e.embedding IS NOT NULL
-    `
-    const params: string[] = []
-
-    if (options?.startDate) {
-      sql += " AND date(t.created_at, 'localtime') >= ?"
-      params.push(options.startDate)
-    }
-
-    if (options?.endDate) {
-      sql += " AND date(t.created_at, 'localtime') <= ?"
-      params.push(options.endDate)
-    }
-
-    const tasksWithEmbeddings = db?.prepare(sql).all(...params) as { id: number; title: string; description: string | null; status: string; priority: string; due_date: string | null; parent_id: number | null; sort_order: number; created_at: string; updated_at: string; embedding: string }[]
-
-    const results = tasksWithEmbeddings
-      .map(task => {
-        const taskEmbedding = JSON.parse(task.embedding) as number[]
-        const similarity = cosineSimilarity(queryEmbedding, taskEmbedding)
-        return {
-          ...task,
-          embedding: undefined,
-          similarity
-        }
-      })
-      .filter(task => task.similarity >= threshold)
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, limit)
-
-    return { tasks: results }
-  } catch (error) {
-    logger.error('Semantic search error:', error)
-    return {
-      error: error instanceof Error ? error.message : 'Failed to perform semantic search',
-      tasks: []
-    }
-  }
-})
-
-ipcMain.handle('search:hybrid', async (_event, query: string, options?: { limit?: number; keywordWeight?: number; threshold?: number; startDate?: string; endDate?: string }) => {
-  logger.info('[search:hybrid] Starting search, query:', query)
-  const limit = options?.limit || 50
-  const keywordWeight = options?.keywordWeight || 0.3
-  const semanticWeight = 1 - keywordWeight
-  const threshold = options?.threshold || 0.7
-
-  try {
-    logger.info('[search:hybrid] Generating embedding for query...')
-    const queryEmbedding = await generateEmbedding(query)
-    logger.info('[search:hybrid] Embedding generated, dimension:', queryEmbedding.length)
-
-    let keywordSql = `
-      SELECT DISTINCT t.id, t.title, t.description, t.status, t.priority, t.due_date, t.created_at, t.updated_at, 1 as keyword_match 
-      FROM tasks t
-      LEFT JOIN task_history h ON t.id = h.task_id
-      WHERE t.title LIKE ? OR t.description LIKE ? OR (h.old_value IS NOT NULL AND h.old_value LIKE ?) OR (h.new_value IS NOT NULL AND h.new_value LIKE ?)
-    `
-    const keywordParams: string[] = [`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`]
-    logger.info('[search:hybrid] Keyword SQL:', keywordSql)
-    logger.info('[search:hybrid] Keyword params:', keywordParams)
-
-    if (options?.startDate) {
-      keywordSql += " AND date(t.created_at, 'localtime') >= ?"
-      keywordParams.push(options.startDate)
-    }
-
-    if (options?.endDate) {
-      keywordSql += " AND date(t.created_at, 'localtime') <= ?"
-      keywordParams.push(options.endDate)
-    }
-
-    const keywordResults = db?.prepare(keywordSql).all(...keywordParams) as { id: number; title: string; description: string | null; status: string; priority: string; due_date: string | null; parent_id: number | null; sort_order: number; created_at: string; updated_at: string; keyword_match: number }[]
-    logger.info('[search:hybrid] Keyword results count:', keywordResults?.length || 0)
-    if (keywordResults && keywordResults.length > 0) {
-      logger.info('[search:hybrid] Keyword result IDs:', keywordResults.map(r => r.id).join(', '))
-    }
-
-    let embeddingSql = `
-      SELECT t.*, e.embedding 
-      FROM tasks t 
-      LEFT JOIN task_embeddings e ON t.id = e.task_id 
-      WHERE e.embedding IS NOT NULL
-    `
-    const embeddingParams: string[] = []
-
-    if (options?.startDate) {
-      embeddingSql += " AND date(t.created_at, 'localtime') >= ?"
-      embeddingParams.push(options.startDate)
-    }
-
-    if (options?.endDate) {
-      embeddingSql += " AND date(t.created_at, 'localtime') <= ?"
-      embeddingParams.push(options.endDate)
-    }
-
-    const tasksWithEmbeddings = db?.prepare(embeddingSql).all(...embeddingParams) as { id: number; title: string; description: string | null; status: string; priority: string; due_date: string | null; parent_id: number | null; sort_order: number; created_at: string; updated_at: string; embedding: string }[]
-
-    const keywordMatchSet = new Set(keywordResults.map(t => t.id))
-
-    const semanticResults = tasksWithEmbeddings.map(task => {
-      const taskEmbedding = JSON.parse(task.embedding) as number[]
-      const similarity = cosineSimilarity(queryEmbedding, taskEmbedding)
-      return {
-        id: task.id,
-        title: task.title,
-        description: task.description,
-        status: task.status,
-        priority: task.priority,
-        due_date: task.due_date,
-        parent_id: task.parent_id,
-        sort_order: task.sort_order,
-        created_at: task.created_at,
-        updated_at: task.updated_at,
-        similarity,
-        keywordMatch: keywordMatchSet.has(task.id) ? 1 : 0
-      }
-    })
-
-    const combinedResults = semanticResults
-      .map(task => ({
-        ...task,
-        combinedScore: task.keywordMatch * keywordWeight + task.similarity * semanticWeight
-      }))
-      .filter(task => task.keywordMatch === 1 || task.similarity >= threshold)
-      .sort((a, b) => b.combinedScore - a.combinedScore)
-      .slice(0, limit)
-
-    return { tasks: combinedResults }
-  } catch (error) {
-    logger.error('[search:hybrid] Search failed:', error)
-    logger.error('[search:hybrid] Error stack:', error instanceof Error ? error.stack : 'No stack trace')
-    return {
-      error: error instanceof Error ? error.message : 'Failed to perform hybrid search',
-      tasks: []
-    }
-  }
-})
-
-function getImagesDir(): string {
-  const dataDir = getDataDir()
-  const imagesDir = path.join(dataDir, 'images')
-  
-  if (!fs.existsSync(imagesDir)) {
-    fs.mkdirSync(imagesDir, { recursive: true })
-  }
-  
-  return imagesDir
+  const vector = JSON.parse(embedding) as number[]
+  embeddingVectorCache.set(taskId, { source: embedding, vector })
+  return vector
 }
 
-ipcMain.handle('image:save', async (_event, imageData: string, fileName: string, taskId?: number) => {
-  try {
-    const imagesDir = getImagesDir()
-    const timestamp = Date.now()
-    const ext = path.extname(fileName) || '.png'
-    const uniqueName = `${timestamp}_${Math.random().toString(36).substr(2, 9)}${ext}`
-    const filePath = path.join(imagesDir, uniqueName)
-    
-    logger.info('[image:save] Saving file:', uniqueName)
-    logger.info('[image:save] Full path:', filePath)
-    
-    const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '')
-    const buffer = Buffer.from(base64Data, 'base64')
-    fs.writeFileSync(filePath, buffer)
-    
-    logger.info('[image:save] Image file saved:', uniqueName)
-    
+function getImagesDir(): string {
+  return ensureImagesDir(getActiveDataDir())
+}
+
+function resolveImageFilePath(imagePath: string): { success: true; fullPath: string } | { success: false; error: string } {
+  return resolveImageFilePathInDir(getImagesDir(), imagePath)
+}
+
+function registerImageProtocol(): void {
+  if (protocol.isProtocolRegistered('app-image')) {
+    return
+  }
+
+  protocol.registerFileProtocol('app-image', (request, callback) => {
     try {
-      logger.info('[image:save] Calling extractText...')
-      const ocrResult = await extractText(filePath, mainWindow)
-      logger.info('[image:save] extractText returned, success:', ocrResult.success, 'text length:', ocrResult.text?.length)
-      
-      logger.info('[image:save] Inserting into ocr_logs...')
-      db?.prepare('INSERT INTO ocr_logs (task_id, image_path, status, message, error) VALUES (?, ?, ?, ?, ?)').run(
-        taskId || null,
-        uniqueName,
-        ocrResult.success ? 'success' : 'failed',
-        ocrResult.success ? `识别完成，文字长度: ${ocrResult.text.length}` : null,
-        ocrResult.error || null
-      )
-      logger.info('[image:save] ocr_logs insert done')
-      
-      if (ocrResult.success && ocrResult.text) {
-        logger.info('[image:save] Inserting into image_texts (success)...')
-        db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_timestamp) VALUES (?, ?, ?, ?, ?)').run(
-          taskId || null, 
-          uniqueName, 
-          ocrResult.text,
-          'success',
-          ocrResult.timestamp
-        )
-        logger.info(`[image:save] OCR completed for task ${taskId || 'new'}, text length: ${ocrResult.text.length}`)
-      } else {
-        logger.info('[image:save] Inserting into image_texts (failed)...')
-        db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
-          taskId || null, 
-          uniqueName, 
-          '',
-          'failed',
-          ocrResult.error || 'Unknown error',
-          ocrResult.timestamp
-        )
-        logger.info(`[image:save] OCR failed for image: ${uniqueName}, error: ${ocrResult.error}`)
+      const parsed = new URL(request.url)
+      if (parsed.hostname !== 'local') {
+        callback({ error: -10 })
+        return
       }
-    } catch (ocrError) {
-      logger.error('[image:save] OCR execution failed (image still saved):', ocrError)
-      db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
-        taskId || null, 
-        uniqueName, 
-        '',
-        'failed',
-        ocrError instanceof Error ? ocrError.message : 'OCR execution failed',
-        new Date().toISOString()
-      )
-    }
-    
-    logger.info('[image:save] Returning:', { success: true, path: uniqueName })
-    return { success: true, path: uniqueName }
-  } catch (error) {
-    logger.error('Failed to save image:', error)
-    return { success: false, error: error instanceof Error ? error.message : 'Failed to save image' }
-  }
-})
 
-ipcMain.handle('image:load', (_event, imagePath: string) => {
+      const imagePath = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''))
+      const resolvedPath = resolveImageFilePath(imagePath)
+      if (!resolvedPath.success || !fs.existsSync(resolvedPath.fullPath)) {
+        callback({ error: -6 })
+        return
+      }
+
+      callback({ path: resolvedPath.fullPath })
+    } catch (error) {
+      logger.error('Failed to resolve app-image URL:', error)
+      callback({ error: -2 })
+    }
+  })
+}
+
+function collectReferencedImagePaths(): Set<string> {
+  const referencedPaths = new Set<string>()
+  const taskRows = db?.prepare('SELECT description FROM tasks WHERE description LIKE ?').all('%local://%') as { description: string | null }[] || []
+  for (const row of taskRows) {
+    for (const imagePath of extractLocalImagePaths(row.description)) {
+      referencedPaths.add(imagePath)
+    }
+  }
+
+  const imageRows = db?.prepare(`
+    SELECT image_path
+    FROM image_texts
+    WHERE task_id IS NOT NULL
+      AND task_id IN (SELECT id FROM tasks)
+  `).all() as { image_path: string }[] || []
+  for (const row of imageRows) {
+    referencedPaths.add(row.image_path)
+  }
+
+  return referencedPaths
+}
+
+function cleanupOrphanImageFiles(minAgeMs = 24 * 60 * 60 * 1000): void {
   try {
     const imagesDir = getImagesDir()
-    const fullPath = path.join(imagesDir, imagePath)
-    
-    if (!fs.existsSync(fullPath)) {
-      return { success: false, error: 'Image not found' }
-    }
-    
-    const buffer = fs.readFileSync(fullPath)
-    const base64 = buffer.toString('base64')
-    const ext = path.extname(imagePath).toLowerCase()
-    const mimeType = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.gif' ? 'image/gif' : 'image/png'
-    
-    return { success: true, data: `data:${mimeType};base64,${base64}` }
-  } catch (error) {
-    logger.error('Failed to load image:', error)
-    return { success: false, error: error instanceof Error ? error.message : 'Failed to load image' }
-  }
-})
+    const referencedPaths = collectReferencedImagePaths()
+    const cutoffTime = Date.now() - minAgeMs
+    const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
+    let removedCount = 0
 
-ipcMain.handle('image:delete', (_event, imagePath: string) => {
-  try {
-    const imagesDir = getImagesDir()
-    const fullPath = path.join(imagesDir, imagePath)
-    
-    if (fs.existsSync(fullPath)) {
-      fs.unlinkSync(fullPath)
-    }
-    
-    return { success: true }
-  } catch (error) {
-    logger.error('Failed to delete image:', error)
-    return { success: false, error: error instanceof Error ? error.message : 'Failed to delete image' }
-  }
-})
-
-ipcMain.handle('search:image', (_event, query: string, options?: { limit?: number; startDate?: string; endDate?: string }) => {
-  const limit = options?.limit || 50
-  
-  let sql = `
-    SELECT DISTINCT t.* 
-    FROM tasks t 
-    INNER JOIN image_texts it ON t.id = it.task_id 
-    WHERE it.text_content LIKE ?
-  `
-  const params: string[] = [`%${query}%`]
-  
-  if (options?.startDate) {
-    sql += " AND date(t.created_at, 'localtime') >= ?"
-    params.push(options.startDate)
-  }
-  
-  if (options?.endDate) {
-    sql += " AND date(t.created_at, 'localtime') <= ?"
-    params.push(options.endDate)
-  }
-  
-  sql += ' ORDER BY t.created_at DESC LIMIT ?'
-  params.push(String(limit))
-  
-  const stmt = db?.prepare(sql)
-  return stmt?.all(...params) || []
-})
-
-ipcMain.handle('config:get', () => {
-  const config = loadConfig()
-  return {
-    dataDir: getDataDir(),
-    customDataDir: config.dataDir || null
-  }
-})
-
-ipcMain.handle('config:setDataDir', (_event, dataDir: string | null) => {
-  try {
-    const config = loadConfig()
-    
-    if (dataDir) {
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true })
+    for (const entry of fs.readdirSync(imagesDir, { withFileTypes: true })) {
+      if (!entry.isFile() || referencedPaths.has(entry.name)) {
+        continue
       }
-      config.dataDir = dataDir
-    } else {
-      delete config.dataDir
-    }
-    
-    const saved = saveConfig(config)
-    return { success: saved }
-  } catch (error) {
-    logger.error('Failed to set data directory:', error)
-    return { success: false, error: error instanceof Error ? error.message : 'Failed to set data directory' }
-  }
-})
 
-ipcMain.handle('dialog:openDirectory', async () => {
-  const { dialog } = await import('electron')
-  const result = await dialog.showOpenDialog(mainWindow!, {
-    properties: ['openDirectory', 'createDirectory'],
-    title: '选择数据存储目录'
-  })
-  
-  if (result.canceled || result.filePaths.length === 0) {
-    return { canceled: true, filePath: null }
-  }
-  
-  return { canceled: false, filePath: result.filePaths[0] }
-})
-
-ipcMain.handle('window:focus', () => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore()
-    }
-    mainWindow.focus()
-    mainWindow.webContents.focus()
-  }
-  return true
-})
-
-ipcMain.handle('dialog:confirm', async (_event, message: string) => {
-  const { dialog } = await import('electron')
-  const result = await dialog.showMessageBox(mainWindow!, {
-    type: 'question',
-    buttons: ['取消', '确定'],
-    defaultId: 1,
-    cancelId: 0,
-    message: message
-  })
-  return result.response === 1
-})
-
-ipcMain.handle('llm:getConfig', () => {
-  const config = loadConfig()
-  return {
-    apiKey: config.llm?.apiKey || null,
-    baseUrl: config.llm?.baseUrl || null,
-    model: config.llm?.model || null,
-    timeout: config.llm?.timeout || 30,
-    verifySSL: config.llm?.verifySSL !== false,
-    promptTemplate: config.llm?.promptTemplate || null
-  }
-})
-
-ipcMain.handle('llm:setConfig', (_event, llmConfig: { apiKey?: string; baseUrl?: string; model?: string; timeout?: number; verifySSL?: boolean; promptTemplate?: string }) => {
-  try {
-    const config = loadConfig()
-    config.llm = {
-      ...config.llm,
-      ...llmConfig
-    }
-    const saved = saveConfig(config)
-    return { success: saved }
-  } catch (error) {
-    logger.error('Failed to set LLM config:', error)
-    return { success: false, error: error instanceof Error ? error.message : 'Failed to set LLM config' }
-  }
-})
-
-ipcMain.handle('llm:generateSummary', async (_event, request: SummaryRequest) => {
-  try {
-    const config = loadConfig()
-    
-    if (!config.llm?.apiKey || !config.llm?.baseUrl) {
-      return { 
-        success: false, 
-        error: '请先配置 LLM API Key 和 Base URL' 
+      if (!imageExtensions.has(path.extname(entry.name).toLowerCase())) {
+        continue
       }
+
+      const resolvedPath = resolveImageFilePath(entry.name)
+      if (!resolvedPath.success) {
+        continue
+      }
+
+      const stats = fs.statSync(resolvedPath.fullPath)
+      if (stats.mtimeMs > cutoffTime) {
+        continue
+      }
+
+      fs.unlinkSync(resolvedPath.fullPath)
+      db?.prepare(`
+        DELETE FROM image_texts
+        WHERE image_path = ?
+          AND (task_id IS NULL OR task_id NOT IN (SELECT id FROM tasks))
+      `).run(entry.name)
+      removedCount++
     }
 
-    const summary = await generateSummary(
-      {
-        apiKey: config.llm.apiKey,
-        baseUrl: config.llm.baseUrl,
-        model: config.llm.model,
-        timeout: config.llm.timeout,
-        verifySSL: config.llm.verifySSL,
-        promptTemplate: config.llm.promptTemplate,
-      },
-      request
-    )
-    
-    return { success: true, summary }
-  } catch (error) {
-    logger.error('Failed to generate summary:', error)
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Failed to generate summary' 
+    if (removedCount > 0) {
+      logger.info(`[image:cleanup] Removed ${removedCount} orphan image file(s)`)
     }
-  }
-})
-
-ipcMain.handle('file:save', async (_event, options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: string }) => {
-  const { dialog } = await import('electron')
-  
-  const result = await dialog.showSaveDialog(mainWindow!, {
-    defaultPath: options.defaultPath,
-    filters: options.filters,
-    title: '保存文件'
-  })
-  
-  if (result.canceled || !result.filePath) {
-    return { success: false, cancelled: true }
-  }
-  
-  try {
-    fs.writeFileSync(result.filePath, options.content, 'utf-8')
-    return { success: true, filePath: result.filePath }
   } catch (error) {
-    logger.error('Failed to save file:', error)
-    return { success: false, error: error instanceof Error ? error.message : '保存文件失败' }
+    logger.error('Failed to clean orphan image files:', error)
   }
-})
+}
 
-ipcMain.handle('file:saveBinary', async (_event, options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: number[] }) => {
-  const { dialog } = await import('electron')
-  
-  const result = await dialog.showSaveDialog(mainWindow!, {
-    defaultPath: options.defaultPath,
-    filters: options.filters,
-    title: '保存文件'
-  })
-  
-  if (result.canceled || !result.filePath) {
-    return { success: false, cancelled: true }
-  }
-  
-  try {
-    const buffer = Buffer.from(options.content)
-    fs.writeFileSync(result.filePath, buffer)
-    return { success: true, filePath: result.filePath }
-  } catch (error) {
-    logger.error('Failed to save binary file:', error)
-    return { success: false, error: error instanceof Error ? error.message : '保存文件失败' }
-  }
+registerTaskHandlers({
+  getDb: () => db,
+  resolveImageFilePath,
+  updateTaskEmbedding,
 })
-
-ipcMain.handle('clipboard:writeImage', (_event, imageData: string) => {
-  try {
-    const image = nativeImage.createFromDataURL(imageData)
-    
-    if (image.isEmpty()) {
-      return { success: false, error: '无法创建图片' }
-    }
-    
-    clipboard.writeImage(image)
-    return { success: true }
-  } catch (error) {
-    logger.error('Failed to write image to clipboard:', error)
-    return { success: false, error: error instanceof Error ? error.message : '复制图片失败' }
-  }
+registerSearchHandlers({
+  getDb: () => db,
+  parseEmbeddingVector,
 })
-
-ipcMain.handle('clipboard:readImage', async () => {
-  try {
-    const image = clipboard.readImage()
-    
-    if (image.isEmpty()) {
-      return { image: null, error: '剪贴板中没有图片' }
-    }
-    
-    const dataUrl = image.toDataURL()
-    return { image: dataUrl }
-  } catch (error) {
-    logger.error('Failed to read image from clipboard:', error)
-    return { image: null, error: error instanceof Error ? error.message : '读取图片失败' }
-  }
+registerImageHandlers({
+  getDb: () => db,
+  getImagesDir,
+  getMainWindow: () => mainWindow,
+  resolveImageFilePath,
 })
-
-ipcMain.handle('app:getVersion', () => {
-  return app.getVersion()
-})
-
-ipcMain.handle('app:checkForUpdates', async () => {
-  if (isDev) {
-    dialog.showMessageBox(mainWindow!, {
-      type: 'info',
-      title: '检查更新',
-      message: '开发模式下无法检查更新',
-      buttons: ['确定']
-    })
-    return { success: false, error: '开发模式下无法检查更新' }
-  }
-  
-  manualUpdateCheck = true
-  try {
-    await autoUpdater.checkForUpdates()
-    return { success: true }
-  } catch (error) {
-    manualUpdateCheck = false
-    return { success: false, error: error instanceof Error ? error.message : '检查更新失败' }
-  }
-})
-
-ipcMain.handle('ocr:getTaskImageInfo', (_event, taskId: number) => {
-  try {
-    const stmt = db?.prepare('SELECT * FROM image_texts WHERE task_id = ?')
-    return stmt?.all(taskId) || []
-  } catch (error) {
-    logger.error('Failed to get task image OCR info:', error)
-    return []
-  }
-})
-
-ipcMain.handle('ocr:getLogs', (_event, limit?: number) => {
-  try {
-    const logLimit = limit || 100
-    const stmt = db?.prepare('SELECT * FROM ocr_logs ORDER BY timestamp DESC LIMIT ?')
-    return stmt?.all(logLimit) || []
-  } catch (error) {
-    logger.error('Failed to get OCR logs:', error)
-    return []
-  }
-})
-
-ipcMain.handle('ocr:retry', async (_event, taskId: number, imagePath: string) => {
-  try {
-    const imagesDir = getImagesDir()
-    const fullPath = path.join(imagesDir, imagePath)
-    
-    if (!fs.existsSync(fullPath)) {
-      return { success: false, error: 'Image file not found' }
-    }
-    
-    const ocrResult = await extractText(fullPath, mainWindow)
-    
-    db?.prepare('INSERT INTO ocr_logs (task_id, image_path, status, message, error) VALUES (?, ?, ?, ?, ?)').run(
-      taskId,
-      imagePath,
-      ocrResult.success ? 'success' : 'failed',
-      ocrResult.success ? `重新识别完成，文字长度: ${ocrResult.text.length}` : null,
-      ocrResult.error || null
-    )
-    
-    const existingRecord = db?.prepare('SELECT id FROM image_texts WHERE task_id = ? AND image_path = ?').get(taskId, imagePath)
-    
-    if (existingRecord) {
-      db?.prepare('UPDATE image_texts SET text_content = ?, ocr_status = ?, ocr_error = ?, ocr_timestamp = ? WHERE task_id = ? AND image_path = ?').run(
-        ocrResult.text,
-        ocrResult.success ? 'success' : 'failed',
-        ocrResult.error || null,
-        ocrResult.timestamp,
-        taskId,
-        imagePath
-      )
-    } else {
-      db?.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_error, ocr_timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
-        taskId,
-        imagePath,
-        ocrResult.text,
-        ocrResult.success ? 'success' : 'failed',
-        ocrResult.error || null,
-        ocrResult.timestamp
-      )
-    }
-    
-    return { success: true }
-  } catch (error) {
-    logger.error('Failed to retry OCR:', error)
-    return { success: false, error: error instanceof Error ? error.message : 'Failed to retry OCR' }
-  }
-})
-
-ipcMain.handle('log:openFolder', () => {
-  const logDir = path.join(app.getPath('userData'), 'logs')
-  if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true })
-  }
-  shell.openPath(logDir)
-  return { success: true }
+registerConfigHandlers({ isDev, appRootDir: __dirname, getActiveDataDir })
+registerDialogHandlers({ getMainWindow: () => mainWindow })
+registerLlmHandlers()
+registerFileHandlers({ getMainWindow: () => mainWindow })
+registerAppHandlers({ isDev, getMainWindow: () => mainWindow })
+registerOcrHandlers({
+  getDb: () => db,
+  getMainWindow: () => mainWindow,
+  resolveImageFilePath,
 })

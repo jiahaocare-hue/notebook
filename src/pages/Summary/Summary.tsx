@@ -1,168 +1,21 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { TaskStats, CompletedTask, SummaryRequest, TaskPriority, TaskStatus, DateFilterMode } from '../../types'
+import React, { useState, useCallback, useMemo } from 'react'
+import { SummaryRequest, DateFilterMode } from '../../types'
 import { llmApi } from '../../ipc/tasks'
-import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, HeadingLevel } from 'docx'
-
-const statusLabelMap: Record<string, string> = {
-  pending: '待处理',
-  in_progress: '进行中',
-  completed: '已完成',
-  cancelled: '已取消',
-}
-
-const priorityLabelMap: Record<string, string> = {
-  high: '高',
-  medium: '中',
-  low: '低',
-}
-
-const stripImageMarks = (text: string): string => {
-  return text
-    .replace(/!\[.*?\]\(local:\/\/[^)]+\)/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-const formatHistoryEntry = (entry: { action: string; old_value: string | null; new_value: string | null; timestamp: string }): string => {
-  const datePrefix = entry.timestamp.split('T')[0] + ': '
-
-  if (entry.action === 'created') {
-    const details: string[] = []
-    try {
-      const newObj = entry.new_value ? JSON.parse(entry.new_value) : {}
-      if (newObj.title) details.push(`标题: ${newObj.title}`)
-      if (newObj.status) details.push(`状态: ${statusLabelMap[newObj.status] || newObj.status}`)
-      if (newObj.priority) details.push(`优先级: ${priorityLabelMap[newObj.priority] || newObj.priority}`)
-      if (newObj.due_date) details.push(`截止日期: ${newObj.due_date}`)
-    } catch {
-      // ignore
-    }
-    return datePrefix + '创建任务' + (details.length > 0 ? `（${details.join('，')}）` : '')
-  }
-
-  if (entry.action === 'status_changed') {
-    let oldStatus = ''
-    let newStatus = ''
-    try {
-      const oldObj = entry.old_value ? JSON.parse(entry.old_value) : {}
-      const newObj = entry.new_value ? JSON.parse(entry.new_value) : {}
-      oldStatus = statusLabelMap[oldObj.status] || oldObj.status || ''
-      newStatus = statusLabelMap[newObj.status] || newObj.status || ''
-    } catch {
-      oldStatus = entry.old_value || ''
-      newStatus = entry.new_value || ''
-    }
-    return datePrefix + `状态从 '${oldStatus}' 变更为 '${newStatus}'`
-  }
-
-  if (entry.action === 'updated') {
-    const changes: string[] = []
-    try {
-      const oldObj = entry.old_value ? JSON.parse(entry.old_value) : {}
-      const newObj = entry.new_value ? JSON.parse(entry.new_value) : {}
-      const allKeys = new Set([...Object.keys(oldObj), ...Object.keys(newObj)])
-      allKeys.forEach(key => {
-        if (oldObj[key] !== newObj[key]) {
-          const fieldLabels: Record<string, string> = {
-            title: '标题',
-            description: '描述',
-            priority: '优先级',
-            status: '状态',
-            due_date: '截止日期',
-          }
-          const label = fieldLabels[key] || key
-          if (key === 'description') {
-            const oldDesc = oldObj[key] ? stripImageMarks(String(oldObj[key])) : '(空)'
-            const newDesc = newObj[key] ? stripImageMarks(String(newObj[key])) : '(空)'
-            changes.push(`描述从 '${oldDesc}' 变更为 '${newDesc}'`)
-          } else if (key === 'priority') {
-            const oldLabel = priorityLabelMap[oldObj[key]] || oldObj[key]
-            const newLabel = priorityLabelMap[newObj[key]] || newObj[key]
-            changes.push(`${label}从 '${oldLabel}' 变更为 '${newLabel}'`)
-          } else if (key === 'status') {
-            const oldLabel = statusLabelMap[oldObj[key]] || oldObj[key]
-            const newLabel = statusLabelMap[newObj[key]] || newObj[key]
-            changes.push(`${label}从 '${oldLabel}' 变更为 '${newLabel}'`)
-          } else {
-            changes.push(`${label}从 '${oldObj[key]}' 变更为 '${newObj[key]}'`)
-          }
-        }
-      })
-    } catch {
-      changes.push('任务已更新')
-    }
-    return datePrefix + (changes.length > 0 ? changes.join('，') : '任务已更新')
-  }
-
-  return datePrefix + entry.action
-}
-
-type TimeRangeType = 'year' | 'week' | 'custom'
-
-interface DateRange {
-  startDate: string
-  endDate: string
-}
-
-const getWeekDateRange = (weekOffset: number = 0): DateRange => {
-  const today = new Date()
-  const dayOfWeek = today.getDay()
-  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
-  
-  const monday = new Date(today)
-  monday.setDate(today.getDate() + diffToMonday + (weekOffset * 7))
-  monday.setHours(0, 0, 0, 0)
-  
-  const sunday = new Date(monday)
-  sunday.setDate(monday.getDate() + 6)
-  sunday.setHours(23, 59, 59, 999)
-  
-  const formatDate = (date: Date): string => {
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
-  }
-  
-  return {
-    startDate: formatDate(monday),
-    endDate: formatDate(sunday),
-  }
-}
+import { DateRange, TimeRangeType, getTodayDateRange, getWeekDateRange } from './summaryUtils'
+import { buildSummaryMarkdownContent, formatHistoryEntry, priorityLabelMap, statusLabelMap, stripImageMarks } from './summaryExports'
+import { buildGeneratedSummaryWordContent, buildSummaryReportWordContent, buildTaskDataWordContent } from './summaryWordExports'
+import { useSummaryData } from './useSummaryData'
 
 const Summary: React.FC = () => {
   const [timeRangeType, setTimeRangeType] = useState<TimeRangeType>('week')
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear())
   const [weekOffset, setWeekOffset] = useState(-1)
   const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('created')
-  const [customDateRange, setCustomDateRange] = useState<DateRange>(() => {
-    const today = new Date()
-    const year = today.getFullYear()
-    const month = String(today.getMonth() + 1).padStart(2, '0')
-    const day = String(today.getDate()).padStart(2, '0')
-    const dateStr = `${year}-${month}-${day}`
-    return {
-      startDate: dateStr,
-      endDate: dateStr,
-    }
-  })
+  const [customDateRange, setCustomDateRange] = useState<DateRange>(() => getTodayDateRange())
   
-  const [stats, setStats] = useState<TaskStats | null>(null)
-  const [completedTasks, setCompletedTasks] = useState<CompletedTask[]>([])
-  const [pendingTasks, setPendingTasks] = useState<CompletedTask[]>([])
-  const [inProgressTasks, setInProgressTasks] = useState<CompletedTask[]>([])
-  const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [exportingTaskData, setExportingTaskData] = useState(false)
   const [summary, setSummary] = useState<string>('')
-  const [error, setError] = useState<string | null>(null)
-
-  const formatDateLocal = (date: Date): string => {
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
-  }
 
   const getDateRange = useCallback((): DateRange => {
     if (timeRangeType === 'year') {
@@ -176,157 +29,21 @@ const Summary: React.FC = () => {
     return customDateRange
   }, [timeRangeType, selectedYear, customDateRange, weekOffset])
 
-  const loadStatistics = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    
-    try {
-      const { startDate, endDate } = getDateRange()
-      
-      const counts = await window.electronAPI.getCounts({ startDate, endDate, dateFilterMode })
-      
-      const tasks = await window.electronAPI.listTasks({ startDate, endDate, dateFilterMode })
-      
-      const processTask = async (task: { id: number; title: string; description: string | null; priority: string; status: string; due_date?: string | null; created_at?: string; updated_at?: string }) => {
-        let history = undefined
-        try {
-          const taskHistory = await window.electronAPI.getTaskHistory(task.id, { limit: 5 })
-          history = taskHistory.map(h => ({
-            action: h.action,
-            old_value: h.old_value,
-            new_value: h.new_value,
-            timestamp: h.timestamp,
-          }))
-        } catch (e) {
-          console.error('Failed to get task history:', e)
-        }
-        
-        return {
-          title: task.title,
-          description: task.description,
-          priority: task.priority as TaskPriority,
-          status: task.status as TaskStatus,
-          dueDate: task.due_date,
-          createdAt: task.created_at,
-          completedAt: task.updated_at,
-          history,
-        }
-      }
-      
-      const completedTasksList: CompletedTask[] = await Promise.all(
-        tasks
-          .filter(task => task.status === 'completed')
-          .map(processTask)
-      )
-      
-      const pendingTasksList: CompletedTask[] = await Promise.all(
-        tasks
-          .filter(task => task.status === 'pending')
-          .map(processTask)
-      )
-      
-      const inProgressTasksList: CompletedTask[] = await Promise.all(
-        tasks
-          .filter(task => task.status === 'in_progress')
-          .map(processTask)
-      )
-      
-      const priorityDistribution = {
-        high: tasks.filter(t => t.priority === 'high').length,
-        medium: tasks.filter(t => t.priority === 'medium').length,
-        low: tasks.filter(t => t.priority === 'low').length,
-      }
-      
-      let monthlyDistribution: { month: string; count: number }[] = []
-      
-      const getDateField = (task: { created_at?: string; updated_at?: string }): string | null => {
-        if (dateFilterMode === 'updated') {
-          return task.updated_at ? task.updated_at.split('T')[0] : null
-        } else if (dateFilterMode === 'created_or_updated') {
-          return task.updated_at ? task.updated_at.split('T')[0] : (task.created_at ? task.created_at.split('T')[0] : null)
-        }
-        return task.created_at ? task.created_at.split('T')[0] : null
-      }
-      
-      if (timeRangeType === 'year') {
-        for (let month = 1; month <= 12; month++) {
-          const monthStr = String(month).padStart(2, '0')
-          const monthStart = `${selectedYear}-${monthStr}-01`
-          const monthEnd = new Date(selectedYear, month, 0)
-          const monthEndStr = formatDateLocal(monthEnd)
-          
-          const monthTasks = tasks.filter(task => {
-            const taskDate = getDateField(task)
-            if (!taskDate) return false
-            return taskDate >= monthStart && taskDate <= monthEndStr
-          })
-          
-          monthlyDistribution.push({
-            month: `${selectedYear}-${monthStr}`,
-            count: monthTasks.length,
-          })
-        }
-      } else {
-        const { startDate, endDate } = getDateRange()
-        const start = new Date(startDate)
-        const end = new Date(endDate)
-        const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1
-        
-        for (let i = 0; i < days; i++) {
-          const date = new Date(start)
-          date.setDate(start.getDate() + i)
-          const dateStr = formatDateLocal(date)
-          
-          const dayTasks = tasks.filter(task => {
-            const taskDate = getDateField(task)
-            if (!taskDate) return false
-            return taskDate === dateStr
-          })
-          
-          monthlyDistribution.push({
-            month: dateStr,
-            count: dayTasks.length,
-          })
-        }
-      }
-      
-      const completedTasksForCalc = tasks.filter(t => t.status === 'completed' && t.created_at && t.updated_at)
-      let avgCompletionTime: number | undefined
-      if (completedTasksForCalc.length > 0) {
-        const totalDays = completedTasksForCalc.reduce((sum, task) => {
-          const created = new Date(task.created_at).getTime()
-          const completed = new Date(task.updated_at).getTime()
-          return sum + (completed - created) / (1000 * 60 * 60 * 24)
-        }, 0)
-        avgCompletionTime = totalDays / completedTasksForCalc.length
-      }
-      
-      const taskStats: TaskStats = {
-        total: counts.all,
-        completed: counts.completed,
-        inProgress: counts.in_progress,
-        pending: counts.pending,
-        cancelled: counts.cancelled,
-        completionRate: counts.all > 0 ? (counts.completed / counts.all) * 100 : 0,
-        avgCompletionTime,
-        priorityDistribution,
-        monthlyDistribution,
-      }
-      
-      setStats(taskStats)
-      setCompletedTasks(completedTasksList)
-      setPendingTasks(pendingTasksList)
-      setInProgressTasks(inProgressTasksList)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '加载统计数据失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [getDateRange, selectedYear, timeRangeType, dateFilterMode])
-
-  useEffect(() => {
-    loadStatistics()
-  }, [loadStatistics])
+  const {
+    completedTasks,
+    error,
+    inProgressTasks,
+    loading,
+    loadStatistics,
+    pendingTasks,
+    setError,
+    stats,
+  } = useSummaryData({
+    dateFilterMode,
+    getDateRange,
+    selectedYear,
+    timeRangeType,
+  })
 
   const handleGenerateSummary = async () => {
     if (!stats) return
@@ -398,72 +115,13 @@ const Summary: React.FC = () => {
     
     try {
       const { startDate, endDate } = getDateRange()
-      const title = timeRangeType === 'week' ? '周度工作总结' : '年度工作总结'
-      
-      const children: (Paragraph | Table)[] = []
-      
-      children.push(new Paragraph({
-        text: title,
-        heading: HeadingLevel.TITLE,
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 400 },
-      }))
-      
-      children.push(new Paragraph({
-        children: [
-          new TextRun({ text: '报告周期：', bold: true }),
-          new TextRun({ text: `${startDate} 至 ${endDate}` }),
-        ],
-        spacing: { after: 400 },
-      }))
-      
-      const lines = summary.split('\n')
-      lines.forEach(line => {
-        if (line.startsWith('### ')) {
-          children.push(new Paragraph({
-            text: line.substring(4),
-            heading: HeadingLevel.HEADING_3,
-            spacing: { before: 200 },
-          }))
-        } else if (line.startsWith('## ')) {
-          children.push(new Paragraph({
-            text: line.substring(3),
-            heading: HeadingLevel.HEADING_2,
-            spacing: { before: 300 },
-          }))
-        } else if (line.startsWith('# ')) {
-          children.push(new Paragraph({
-            text: line.substring(2),
-            heading: HeadingLevel.HEADING_1,
-            spacing: { before: 400 },
-          }))
-        } else if (line.startsWith('- ') || line.startsWith('* ')) {
-          children.push(new Paragraph({
-            text: line.substring(2),
-            bullet: { level: 0 },
-          }))
-        } else if (line.match(/^\d+\.\s/)) {
-          children.push(new Paragraph({
-            text: line.replace(/^\d+\.\s/, ''),
-            bullet: { level: 0 },
-          }))
-        } else if (line.trim() !== '') {
-          children.push(new Paragraph({ text: line }))
-        }
+      const content = await buildGeneratedSummaryWordContent({
+        endDate,
+        selectedYear,
+        startDate,
+        summary,
+        timeRangeType,
       })
-      
-      children.push(new Paragraph({
-        text: `生成时间: ${new Date().toLocaleString('zh-CN')}`,
-        spacing: { before: 400 },
-        alignment: AlignmentType.RIGHT,
-      }))
-      
-      const doc = new Document({
-        sections: [{ children }],
-      })
-      
-      const blob = await Packer.toBlob(doc)
-      const arrayBuffer = await blob.arrayBuffer()
 
       const fileName = timeRangeType === 'week'
         ? `周度工作总结_${startDate}_${endDate}.docx`
@@ -472,7 +130,7 @@ const Summary: React.FC = () => {
       const result = await window.electronAPI.saveBinaryFile({
         defaultPath: fileName,
         filters: [{ name: 'Word Document', extensions: ['docx'] }],
-        content: Array.from(new Uint8Array(arrayBuffer)),
+        content,
       })
       
       if (result.success) {
@@ -487,93 +145,17 @@ const Summary: React.FC = () => {
 
   const generateMarkdownContent = (): string => {
     const { startDate, endDate } = getDateRange()
-    const title = timeRangeType === 'week' ? '周度总结报告' : '年度总结报告'
-    
-    let md = `# ${title}\n\n`
-    md += `**报告周期**：${startDate} 至 ${endDate}\n\n`
-    
-    if (stats) {
-      md += `## 统计概览\n\n`
-      md += `| 指标 | 数值 | 状态 |\n`
-      md += `|:---|:---|:---|\n`
-      md += `| 任务总数 | ${stats.total} | - |\n`
-      md += `| 已完成 | ${stats.completed} | ${stats.completionRate >= 70 ? '✅ 良好' : stats.completionRate >= 40 ? '⚠️ 一般' : '❌ 需改进'} |\n`
-      md += `| 进行中 | ${stats.inProgress} | - |\n`
-      md += `| 待处理 | ${stats.pending} | - |\n`
-      md += `| 完成率 | ${stats.completionRate.toFixed(1)}% | ${stats.completionRate >= 70 ? '✅ 达标' : stats.completionRate >= 40 ? '⚠️ 偏低' : '❌ 极低'} |\n`
-      if (stats.avgCompletionTime !== undefined) {
-        md += `| 平均完成时间 | ${stats.avgCompletionTime.toFixed(1)}天 | ${stats.avgCompletionTime <= 3 ? '✅ 高效' : stats.avgCompletionTime <= 7 ? '⚠️ 正常' : '❌ 较慢'} |\n`
-      }
-      md += `\n`
-      
-      md += `## 优先级分布\n\n`
-      md += `| 优先级 | 数量 |\n`
-      md += `|:---|:---|\n`
-      md += `| 高优先级 | ${stats.priorityDistribution.high} |\n`
-      md += `| 中优先级 | ${stats.priorityDistribution.medium} |\n`
-      md += `| 低优先级 | ${stats.priorityDistribution.low} |\n`
-      md += `\n`
-      
-      if (timeRangeType === 'week') {
-        md += `## 任务详情\n\n`
-        
-        if (completedTasks.length > 0) {
-          md += `### 已完成任务 (${completedTasks.length})\n\n`
-          completedTasks.forEach((task, index) => {
-            const priorityLabel = task.priority === 'high' ? '🔴' : task.priority === 'medium' ? '🟡' : '🟢'
-            md += `${index + 1}. ${priorityLabel} **${task.title}**\n`
-            if (task.description) {
-              md += `   - 描述: ${task.description}\n`
-            }
-            if (task.completedAt) {
-              md += `   - 完成时间: ${task.completedAt.split('T')[0]}\n`
-            }
-          })
-          md += `\n`
-        }
-        
-        if (inProgressTasks.length > 0) {
-          md += `### 进行中任务 (${inProgressTasks.length})\n\n`
-          inProgressTasks.forEach((task, index) => {
-            const priorityLabel = task.priority === 'high' ? '🔴' : task.priority === 'medium' ? '🟡' : '🟢'
-            md += `${index + 1}. ${priorityLabel} **${task.title}**\n`
-            if (task.description) {
-              md += `   - 描述: ${task.description}\n`
-            }
-            if (task.dueDate) {
-              md += `   - 截止日期: ${task.dueDate}\n`
-            }
-          })
-          md += `\n`
-        }
-        
-        if (pendingTasks.length > 0) {
-          md += `### 待处理任务 (${pendingTasks.length})\n\n`
-          pendingTasks.forEach((task, index) => {
-            const priorityLabel = task.priority === 'high' ? '🔴' : task.priority === 'medium' ? '🟡' : '🟢'
-            md += `${index + 1}. ${priorityLabel} **${task.title}**\n`
-            if (task.description) {
-              md += `   - 描述: ${task.description}\n`
-            }
-            if (task.dueDate) {
-              md += `   - 截止日期: ${task.dueDate}\n`
-            }
-          })
-          md += `\n`
-        }
-      }
-    }
-    
-    if (summary) {
-      md += `## 智能总结\n\n`
-      md += summary
-      md += `\n`
-    }
-    
-    md += `\n---\n`
-    md += `*报告生成时间: ${new Date().toLocaleString('zh-CN')}*\n`
-    
-    return md
+    return buildSummaryMarkdownContent({
+      startDate,
+      endDate,
+      selectedYear,
+      timeRangeType,
+      stats,
+      completedTasks,
+      pendingTasks,
+      inProgressTasks,
+      summary,
+    })
   }
 
   const handleExportMarkdown = async () => {
@@ -605,227 +187,17 @@ const Summary: React.FC = () => {
   const handleExportWord = async () => {
     try {
       const { startDate, endDate } = getDateRange()
-      const title = timeRangeType === 'week' ? '周度总结报告' : '年度总结报告'
-      
-      const children: (Paragraph | Table)[] = []
-      
-      children.push(new Paragraph({
-        text: title,
-        heading: HeadingLevel.TITLE,
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 400 },
-      }))
-      
-      children.push(new Paragraph({
-        children: [
-          new TextRun({ text: '报告周期：', bold: true }),
-          new TextRun({ text: `${startDate} 至 ${endDate}` }),
-        ],
-        spacing: { after: 400 },
-      }))
-      
-      if (stats) {
-        children.push(new Paragraph({
-          text: '统计概览',
-          heading: HeadingLevel.HEADING_1,
-          spacing: { before: 400, after: 200 },
-        }))
-        
-        const statusText = (rate: number): string => {
-          if (rate >= 70) return '✅ 良好'
-          if (rate >= 40) return '⚠️ 一般'
-          return '❌ 需改进'
-        }
-        
-        const table = new Table({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          rows: [
-            new TableRow({
-              children: [
-                new TableCell({ children: [new Paragraph({ text: '指标', alignment: AlignmentType.CENTER })], width: { size: 33, type: WidthType.PERCENTAGE } }),
-                new TableCell({ children: [new Paragraph({ text: '数值', alignment: AlignmentType.CENTER })], width: { size: 33, type: WidthType.PERCENTAGE } }),
-                new TableCell({ children: [new Paragraph({ text: '状态', alignment: AlignmentType.CENTER })], width: { size: 34, type: WidthType.PERCENTAGE } }),
-              ],
-            }),
-            new TableRow({
-              children: [
-                new TableCell({ children: [new Paragraph('任务总数')] }),
-                new TableCell({ children: [new Paragraph({ text: String(stats.total), alignment: AlignmentType.CENTER })] }),
-                new TableCell({ children: [new Paragraph({ text: '-', alignment: AlignmentType.CENTER })] }),
-              ],
-            }),
-            new TableRow({
-              children: [
-                new TableCell({ children: [new Paragraph('已完成')] }),
-                new TableCell({ children: [new Paragraph({ text: String(stats.completed), alignment: AlignmentType.CENTER })] }),
-                new TableCell({ children: [new Paragraph({ text: statusText(stats.completionRate), alignment: AlignmentType.CENTER })] }),
-              ],
-            }),
-            new TableRow({
-              children: [
-                new TableCell({ children: [new Paragraph('进行中')] }),
-                new TableCell({ children: [new Paragraph({ text: String(stats.inProgress), alignment: AlignmentType.CENTER })] }),
-                new TableCell({ children: [new Paragraph({ text: '-', alignment: AlignmentType.CENTER })] }),
-              ],
-            }),
-            new TableRow({
-              children: [
-                new TableCell({ children: [new Paragraph('待处理')] }),
-                new TableCell({ children: [new Paragraph({ text: String(stats.pending), alignment: AlignmentType.CENTER })] }),
-                new TableCell({ children: [new Paragraph({ text: '-', alignment: AlignmentType.CENTER })] }),
-              ],
-            }),
-            new TableRow({
-              children: [
-                new TableCell({ children: [new Paragraph('完成率')] }),
-                new TableCell({ children: [new Paragraph({ text: `${stats.completionRate.toFixed(1)}%`, alignment: AlignmentType.CENTER })] }),
-                new TableCell({ children: [new Paragraph({ text: stats.completionRate >= 70 ? '✅ 达标' : stats.completionRate >= 40 ? '⚠️ 偏低' : '❌ 极低', alignment: AlignmentType.CENTER })] }),
-              ],
-            }),
-          ],
-        })
-        
-        children.push(table)
-        
-        if (timeRangeType === 'week') {
-          if (completedTasks.length > 0) {
-            children.push(new Paragraph({
-              text: `已完成任务 (${completedTasks.length})`,
-              heading: HeadingLevel.HEADING_2,
-              spacing: { before: 400, after: 200 },
-            }))
-            
-            completedTasks.forEach((task, index) => {
-              const priorityLabel = task.priority === 'high' ? '[高]' : task.priority === 'medium' ? '[中]' : '[低]'
-              children.push(new Paragraph({
-                children: [
-                  new TextRun({ text: `${index + 1}. ${priorityLabel} `, bold: true }),
-                  new TextRun({ text: task.title, bold: true }),
-                ],
-                spacing: { before: 100 },
-              }))
-              if (task.description) {
-                children.push(new Paragraph({
-                  text: `   描述: ${task.description}`,
-                  indent: { left: 360 },
-                }))
-              }
-            })
-          }
-          
-          if (inProgressTasks.length > 0) {
-            children.push(new Paragraph({
-              text: `进行中任务 (${inProgressTasks.length})`,
-              heading: HeadingLevel.HEADING_2,
-              spacing: { before: 400, after: 200 },
-            }))
-            
-            inProgressTasks.forEach((task, index) => {
-              const priorityLabel = task.priority === 'high' ? '[高]' : task.priority === 'medium' ? '[中]' : '[低]'
-              children.push(new Paragraph({
-                children: [
-                  new TextRun({ text: `${index + 1}. ${priorityLabel} `, bold: true }),
-                  new TextRun({ text: task.title, bold: true }),
-                ],
-                spacing: { before: 100 },
-              }))
-              if (task.description) {
-                children.push(new Paragraph({
-                  text: `   描述: ${task.description}`,
-                  indent: { left: 360 },
-                }))
-              }
-              if (task.dueDate) {
-                children.push(new Paragraph({
-                  text: `   截止日期: ${task.dueDate}`,
-                  indent: { left: 360 },
-                }))
-              }
-            })
-          }
-          
-          if (pendingTasks.length > 0) {
-            children.push(new Paragraph({
-              text: `待处理任务 (${pendingTasks.length})`,
-              heading: HeadingLevel.HEADING_2,
-              spacing: { before: 400, after: 200 },
-            }))
-            
-            pendingTasks.forEach((task, index) => {
-              const priorityLabel = task.priority === 'high' ? '[高]' : task.priority === 'medium' ? '[中]' : '[低]'
-              children.push(new Paragraph({
-                children: [
-                  new TextRun({ text: `${index + 1}. ${priorityLabel} `, bold: true }),
-                  new TextRun({ text: task.title, bold: true }),
-                ],
-                spacing: { before: 100 },
-              }))
-              if (task.description) {
-                children.push(new Paragraph({
-                  text: `   描述: ${task.description}`,
-                  indent: { left: 360 },
-                }))
-              }
-            })
-          }
-        }
-      }
-      
-      if (summary) {
-        children.push(new Paragraph({
-          text: '智能总结',
-          heading: HeadingLevel.HEADING_1,
-          spacing: { before: 400, after: 200 },
-        }))
-        
-        const lines = summary.split('\n')
-        lines.forEach(line => {
-          if (line.startsWith('### ')) {
-            children.push(new Paragraph({
-              text: line.substring(4),
-              heading: HeadingLevel.HEADING_3,
-              spacing: { before: 200 },
-            }))
-          } else if (line.startsWith('## ')) {
-            children.push(new Paragraph({
-              text: line.substring(3),
-              heading: HeadingLevel.HEADING_2,
-              spacing: { before: 300 },
-            }))
-          } else if (line.startsWith('# ')) {
-            children.push(new Paragraph({
-              text: line.substring(2),
-              heading: HeadingLevel.HEADING_1,
-              spacing: { before: 400 },
-            }))
-          } else if (line.startsWith('- ') || line.startsWith('* ')) {
-            children.push(new Paragraph({
-              text: line.substring(2),
-              bullet: { level: 0 },
-            }))
-          } else if (line.match(/^\d+\.\s/)) {
-            children.push(new Paragraph({
-              text: line.replace(/^\d+\.\s/, ''),
-              bullet: { level: 0 },
-            }))
-          } else if (line.trim() !== '') {
-            children.push(new Paragraph({ text: line }))
-          }
-        })
-      }
-      
-      children.push(new Paragraph({
-        text: `报告生成时间: ${new Date().toLocaleString('zh-CN')}`,
-        spacing: { before: 400 },
-        alignment: AlignmentType.RIGHT,
-      }))
-      
-      const doc = new Document({
-        sections: [{ children }],
+      const content = await buildSummaryReportWordContent({
+        completedTasks,
+        endDate,
+        inProgressTasks,
+        pendingTasks,
+        selectedYear,
+        startDate,
+        stats,
+        summary,
+        timeRangeType,
       })
-      
-      const blob = await Packer.toBlob(doc)
-      const arrayBuffer = await blob.arrayBuffer()
 
       const fileName = timeRangeType === 'week'
         ? `周度总结_${startDate}_${endDate}.docx`
@@ -834,7 +206,7 @@ const Summary: React.FC = () => {
       const result = await window.electronAPI.saveBinaryFile({
         defaultPath: fileName,
         filters: [{ name: 'Word Document', extensions: ['docx'] }],
-        content: Array.from(new Uint8Array(arrayBuffer)),
+        content,
       })
       
       if (result.success) {
@@ -923,130 +295,17 @@ const Summary: React.FC = () => {
         return
       }
 
-      const children: (Paragraph | Table)[] = []
-
-      children.push(new Paragraph({
-        text: '任务数据导出',
-        heading: HeadingLevel.TITLE,
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 400 },
-      }))
-
-      children.push(new Paragraph({
-        children: [
-          new TextRun({ text: '时间范围：', bold: true }),
-          new TextRun({ text: `${startDate} 至 ${endDate}` }),
-        ],
-        spacing: { after: 200 },
-      }))
-
-      const filterModeLabel = dateFilterMode === 'updated' ? '更新时间' : dateFilterMode === 'created_or_updated' ? '创建或更新时间' : '创建时间'
-      children.push(new Paragraph({
-        children: [
-          new TextRun({ text: '筛选模式：', bold: true }),
-          new TextRun({ text: filterModeLabel }),
-        ],
-        spacing: { after: 400 },
-      }))
-
-      children.push(new Paragraph({
-        text: '',
-        spacing: { after: 200 },
-      }))
-
-      tasks.forEach((task, index) => {
-        children.push(new Paragraph({
-          text: `${index + 1}. ${task.title}`,
-          heading: HeadingLevel.HEADING_2,
-          spacing: { before: 300, after: 200 },
-        }))
-
-        children.push(new Paragraph({
-          children: [
-            new TextRun({ text: '创建时间：', bold: true }),
-            new TextRun({ text: task.created_at.split('T')[0] }),
-          ],
-          spacing: { after: 80 },
-        }))
-
-        children.push(new Paragraph({
-          children: [
-            new TextRun({ text: '优先级：', bold: true }),
-            new TextRun({ text: priorityLabelMap[task.priority] || task.priority }),
-          ],
-          spacing: { after: 80 },
-        }))
-
-        children.push(new Paragraph({
-          children: [
-            new TextRun({ text: '状态：', bold: true }),
-            new TextRun({ text: statusLabelMap[task.status] || task.status }),
-          ],
-          spacing: { after: 80 },
-        }))
-
-        children.push(new Paragraph({
-          children: [
-            new TextRun({ text: '截止日期：', bold: true }),
-            new TextRun({ text: task.due_date || '无' }),
-          ],
-          spacing: { after: 200 },
-        }))
-
-        if (task.description) {
-          children.push(new Paragraph({
-            children: [
-              new TextRun({ text: '描述：', bold: true }),
-            ],
-            spacing: { after: 80 },
-          }))
-          children.push(new Paragraph({
-            text: stripImageMarks(task.description),
-            spacing: { after: 200 },
-          }))
-        }
-
-        if (task.history && task.history.length > 0) {
-          children.push(new Paragraph({
-            children: [
-              new TextRun({ text: '变更历史：', bold: true }),
-            ],
-            spacing: { after: 80 },
-          }))
-          task.history.forEach(h => {
-            children.push(new Paragraph({
-              text: formatHistoryEntry(h),
-              bullet: { level: 0 },
-            }))
-          })
-        }
-
-        children.push(new Paragraph({
-          text: '',
-          spacing: { before: 200, after: 200 },
-          border: {
-            bottom: { style: 'single', size: 1, color: 'CCCCCC' },
-          },
-        }))
+      const content = await buildTaskDataWordContent({
+        dateFilterMode,
+        endDate,
+        startDate,
+        tasks,
       })
-
-      children.push(new Paragraph({
-        text: `导出时间: ${new Date().toLocaleString('zh-CN')}`,
-        spacing: { before: 400 },
-        alignment: AlignmentType.RIGHT,
-      }))
-
-      const doc = new Document({
-        sections: [{ children }],
-      })
-
-      const blob = await Packer.toBlob(doc)
-      const arrayBuffer = await blob.arrayBuffer()
 
       const result = await window.electronAPI.saveBinaryFile({
         defaultPath: `任务数据_${startDate}_${endDate}.docx`,
         filters: [{ name: 'Word Document', extensions: ['docx'] }],
-        content: Array.from(new Uint8Array(arrayBuffer)),
+        content,
       })
 
       if (result.success) {

@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-electron/
+release/
+cache/
+data/
+resume-output/
+.node-gyp-cache/
+.trae/
+
+*.log
+*.sqlite
+*.sqlite-journal
+*.traineddata
+
+.DS_Store
+Thumbs.db

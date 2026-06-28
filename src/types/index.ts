@@ -45,6 +45,8 @@ export interface TaskHistory {
 
 export type TaskHistoryItem = Omit<TaskHistory, 'id' | 'task_id'>
 
+export type TaskWithHistory = Task & { history: TaskHistory[] }
+
 export type SearchMode = 'keyword' | 'hybrid' | 'image'
 
 export type StatusFilter = 'all' | 'pending' | 'in_progress' | 'completed' | 'cancelled'
@@ -59,6 +61,13 @@ export interface TaskFilters {
   startDate?: string
   endDate?: string
   dateFilterMode?: DateFilterMode
+}
+
+export interface DateRangeFilters {
+  date?: string
+  startDate?: string
+  endDate?: string
+  dateFilterMode?: string
 }
 
 export interface SearchOptions {
@@ -83,6 +92,14 @@ export interface SearchResult<T> {
   tasks: T[]
 }
 
+export interface TaskCounts {
+  all: number
+  pending: number
+  in_progress: number
+  completed: number
+  cancelled: number
+}
+
 export interface TaskStats {
   total: number
   completed: number
@@ -97,6 +114,13 @@ export interface TaskStats {
     low: number
   }
   monthlyDistribution: { month: string; count: number }[]
+}
+
+export interface SummaryStatsFilters {
+  startDate?: string
+  endDate?: string
+  dateFilterMode?: string
+  bucket?: 'day' | 'month'
 }
 
 export interface CompletedTask {
@@ -137,4 +161,160 @@ export interface ActivityTimelineItem {
 export interface SubtaskCounts {
   total: number
   completed: number
+}
+
+export interface ImageOCRInfo {
+  id: number
+  task_id: number
+  image_path: string
+  text_content: string | null
+  ocr_status: string
+  ocr_error: string | null
+  ocr_timestamp: string | null
+  created_at: string
+}
+
+export interface OCRLog {
+  id: number
+  task_id: number | null
+  image_path: string | null
+  status: string
+  message: string | null
+  error: string | null
+  timestamp: string
+}
+
+export interface OCRLogsPage {
+  logs: OCRLog[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface OperationResult {
+  success: boolean
+  error?: string
+}
+
+export interface ImageSaveResult extends OperationResult {
+  path?: string
+}
+
+export interface ImageLoadResult extends OperationResult {
+  data?: string
+}
+
+export interface AppConfigResult {
+  dataDir: string
+  customDataDir: string | null
+}
+
+export interface SetDataDirResult extends OperationResult {
+  requiresRestart?: boolean
+  activeDataDir?: string
+  pendingDataDir?: string
+}
+
+export interface DirectoryDialogResult {
+  canceled: boolean
+  filePath: string | null
+}
+
+export interface LlmConfig {
+  apiKey: string | null
+  baseUrl: string | null
+  model: string | null
+  timeout: number
+  verifySSL: boolean
+  promptTemplate: string | null
+}
+
+export interface LlmConfigUpdate {
+  apiKey?: string
+  baseUrl?: string
+  model?: string
+  timeout?: number
+  verifySSL?: boolean
+  promptTemplate?: string
+}
+
+export interface SummaryResult extends OperationResult {
+  summary?: string
+}
+
+export interface FileSaveOptions {
+  defaultPath: string
+  filters: { name: string; extensions: string[] }[]
+  content: string
+}
+
+export interface BinaryFileSaveOptions {
+  defaultPath: string
+  filters: { name: string; extensions: string[] }[]
+  content: number[]
+}
+
+export interface FileSaveResult extends OperationResult {
+  cancelled?: boolean
+  filePath?: string
+}
+
+export interface ClipboardReadResult {
+  image: string | null
+  error?: string
+}
+
+export interface OcrProgress {
+  status: string
+  progress: number
+  message: string
+}
+
+export interface ElectronAPI {
+  createTask: (task: NewTask) => Promise<number>
+  updateTask: (taskId: number, task: UpdateTask) => Promise<boolean>
+  deleteTask: (taskId: number) => Promise<boolean>
+  getTask: (taskId: number) => Promise<Task | undefined>
+  getTasks: (taskIds: number[]) => Promise<Task[]>
+  listTasks: (filters?: TaskFilters) => Promise<Task[]>
+  listTasksWithHistory: (filters?: DateRangeFilters) => Promise<TaskWithHistory[]>
+  getCounts: (filters?: DateRangeFilters) => Promise<TaskCounts>
+  getSummaryStats: (filters?: SummaryStatsFilters) => Promise<TaskStats>
+  getEarliestTaskDate: () => Promise<string>
+  listSubtasks: (parentId: number) => Promise<Task[]>
+  getSubtaskCounts: (taskId: number) => Promise<SubtaskCounts>
+  getSubtaskCountsBatch: (taskIds: number[]) => Promise<Record<number, SubtaskCounts>>
+  getActivityTimeline: (taskId: number, options?: { limit?: number; offset?: number }) => Promise<ActivityTimelineItem[]>
+  getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }) => Promise<TaskHistory[]>
+  deleteHistory: (historyId: number) => Promise<boolean>
+  updateHistory: (historyId: number, newValue: string) => Promise<boolean>
+  searchKeyword: (query: string, options?: SearchOptions) => Promise<Task[]>
+  searchSemantic: (query: string, options?: SearchOptions) => Promise<SearchResult<SemanticSearchResult>>
+  searchHybrid: (query: string, options?: SearchOptions & { keywordWeight?: number }) => Promise<SearchResult<HybridSearchResult>>
+  setApiKey: (apiKey: string) => Promise<boolean>
+  getApiKey: () => Promise<string | null>
+  saveImage: (imageData: string, fileName: string, taskId?: number) => Promise<ImageSaveResult>
+  loadImage: (imagePath: string) => Promise<ImageLoadResult>
+  deleteImage: (imagePath: string) => Promise<OperationResult>
+  searchImage: (query: string, options?: SearchOptions) => Promise<Task[]>
+  getConfig: () => Promise<AppConfigResult>
+  setDataDir: (dataDir: string | null) => Promise<SetDataDirResult>
+  openDirectoryDialog: () => Promise<DirectoryDialogResult>
+  focusWindow: () => Promise<boolean>
+  showConfirmDialog: (message: string) => Promise<boolean>
+  getLlmConfig: () => Promise<LlmConfig>
+  setLlmConfig: (config: LlmConfigUpdate) => Promise<OperationResult>
+  generateSummary: (request: SummaryRequest) => Promise<SummaryResult>
+  saveFile: (options: FileSaveOptions) => Promise<FileSaveResult>
+  saveBinaryFile: (options: BinaryFileSaveOptions) => Promise<FileSaveResult>
+  writeImageToClipboard: (imageData: string) => Promise<OperationResult>
+  readImageFromClipboard: () => Promise<ClipboardReadResult>
+  getAppVersion: () => Promise<string>
+  checkForUpdates: () => Promise<OperationResult>
+  onOcrProgress: (callback: (progress: OcrProgress) => void) => void
+  removeOcrProgressListener: () => void
+  getTaskImageOCRInfo: (taskId: number) => Promise<ImageOCRInfo[]>
+  getOCRLogs: (options?: number | { limit?: number; offset?: number }) => Promise<OCRLog[] | OCRLogsPage>
+  retryOCR: (taskId: number, imagePath: string) => Promise<OperationResult>
+  openLogFolder: () => Promise<{ success: boolean }>
 }

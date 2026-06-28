@@ -1,5 +1,5 @@
-appId: com.taskmanager.app
-productName: 任务管理器
+appId: com.example.task-manager
+productName: Task Manager
 copyright: Copyright © 2024
 
 directories:
@@ -15,6 +15,8 @@ files:
 extraResources:
   - from: resources
     to: resources
+    filter:
+      - "**/*"
 
 win:
   target:
@@ -28,22 +30,16 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: 任务管理器
+  shortcutName: Task Manager
 
 mac:
   target:
-    - target: dmg
-      arch:
-        - x64
-        - arm64
-  icon: resources/icon.icns
+    - dmg
+  icon: resources/icon.svg
 
 linux:
   target:
-    - target: AppImage
-      arch:
-        - x64
-      icon: resources/icons
+    - AppImage
 
 publish:
   provider: github

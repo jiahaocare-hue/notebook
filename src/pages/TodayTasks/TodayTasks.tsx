@@ -58,6 +58,19 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
 
   useEffect(() => {
     const loadSubtaskCounts = async () => {
+      if (tasks.length === 0) {
+        setSubtaskCounts({})
+        return
+      }
+
+      try {
+        const batchCounts = await taskApi.getSubtaskCountsBatch(tasks.map(task => task.id))
+        setSubtaskCounts(batchCounts)
+        return
+      } catch {
+        // Fall back to per-task loading if the batch IPC is unavailable.
+      }
+
       const counts: Record<number, { total: number; completed: number }> = {}
       for (const task of tasks) {
         try {
@@ -65,15 +78,13 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
           if (result.total > 0) {
             counts[task.id] = result
           }
-        } catch (err) {
+        } catch {
           // 忽略单个任务的统计错误
         }
       }
       setSubtaskCounts(counts)
     }
-    if (tasks.length > 0) {
-      loadSubtaskCounts()
-    }
+    loadSubtaskCounts()
   }, [tasks])
 
   const [sortType, setSortType] = useState<SortType>('created_at')
@@ -162,11 +173,12 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
         case 'created_at':
           comparison = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
           break
-        case 'due_date':
+        case 'due_date': {
           const dateA = a.due_date ? new Date(a.due_date).getTime() : Infinity
           const dateB = b.due_date ? new Date(b.due_date).getTime() : Infinity
           comparison = dateA - dateB
           break
+        }
         case 'priority':
           comparison = priorityWeight(a.priority) - priorityWeight(b.priority)
           break
@@ -238,7 +250,7 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       if (filters.endDate) dateFilters.endDate = filters.endDate
       if (filters.dateFilterMode) dateFilters.dateFilterMode = filters.dateFilterMode
       await refreshCounts(dateFilters)
-    } catch (err) {
+        } catch (err) {
       setError(err instanceof Error ? err.message : '更新任务失败')
     }
   }

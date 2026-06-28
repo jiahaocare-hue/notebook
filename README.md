@@ -147,6 +147,8 @@ npm run electron:dev
 3. 选择新的存储位置
 4. 重启应用生效
 
+当前运行中的数据库连接和图片目录会继续使用启动时的数据目录；新的目录配置会在下次启动应用时生效。应用会在数据库初始化前自动备份已有 `tasks.db`，备份位于数据目录的 `backups/` 子目录，默认保留最近 10 份。
+
 ### 数据库结构
 
 应用使用 SQLite 数据库，包含以下表：
@@ -206,9 +208,16 @@ task-manager/
 |------|------|
 | `npm run dev` | 启动 Vite 开发服务器 |
 | `npm run build` | 构建前端和 Electron 代码 |
+| `npm run build:electron` | 只编译 Electron 主进程代码 |
 | `npm run electron:dev` | 启动开发模式（前端 + Electron） |
 | `npm run electron:build` | 打包应用 |
-| `npm run lint` | 代码检查 |
+| `npm run typecheck` | 检查前端和 Electron TypeScript 类型 |
+| `npm run lint` | 执行 ESLint 和 TypeScript 类型检查 |
+| `npm run regression:smoke` | 运行只读回归烟测，覆盖数据库、搜索、摘要聚合、OCR 记录和打包资源路径 |
+
+### 日志
+
+应用日志位于 Electron 用户数据目录的 `logs/app.log`。默认记录 `info`、`warn`、`error`，可通过 `LOG_LEVEL=debug` 打开调试日志。日志文件超过 2MB 会自动轮转，并保留最近 5 份。
 
 ### IPC 通信 API
 
@@ -216,31 +225,40 @@ task-manager/
 
 ```typescript
 // 任务操作
-window.electronAPI.task.create(task)
-window.electronAPI.task.update(id, task)
-window.electronAPI.task.delete(id)
-window.electronAPI.task.get(id)
-window.electronAPI.task.list(filters)
+window.electronAPI.createTask(task)
+window.electronAPI.updateTask(id, task)
+window.electronAPI.deleteTask(id)
+window.electronAPI.getTask(id)
+window.electronAPI.getTasks(ids)
+window.electronAPI.listTasks(filters)
+window.electronAPI.listTasksWithHistory(filters)
+window.electronAPI.getCounts(filters)
+window.electronAPI.getSummaryStats(filters)
 
 // 搜索
-window.electronAPI.search.keyword(query, options)
-window.electronAPI.search.semantic(query, options)
-window.electronAPI.search.hybrid(query, options)
-window.electronAPI.search.image(query, options)
+window.electronAPI.searchKeyword(query, options)
+window.electronAPI.searchSemantic(query, options)
+window.electronAPI.searchHybrid(query, options)
+window.electronAPI.searchImage(query, options)
 
 // 图片操作
-window.electronAPI.image.save(imageData, fileName, taskId)
-window.electronAPI.image.load(imagePath)
-window.electronAPI.image.delete(imagePath)
+window.electronAPI.saveImage(imageData, fileName, taskId)
+window.electronAPI.loadImage(imagePath)
+window.electronAPI.deleteImage(imagePath)
 
 // 配置
-window.electronAPI.config.get()
-window.electronAPI.config.setDataDir(path)
+window.electronAPI.getConfig()
+window.electronAPI.setDataDir(path)
 
 // LLM
-window.electronAPI.llm.getConfig()
-window.electronAPI.llm.setConfig(config)
-window.electronAPI.llm.generateSummary(request)
+window.electronAPI.getLlmConfig()
+window.electronAPI.setLlmConfig(config)
+window.electronAPI.generateSummary(request)
+
+// OCR
+window.electronAPI.getTaskImageOCRInfo(taskId)
+window.electronAPI.getOCRLogs({ limit, offset })
+window.electronAPI.retryOCR(taskId, imagePath)
 ```
 
 ## 许可证

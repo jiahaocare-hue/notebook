@@ -1,76 +1,26 @@
-import { Task, NewTask, UpdateTask, TaskHistory, TaskFilters, SearchMode, SearchOptions, SummaryRequest, ActivityTimelineItem, SubtaskCounts } from '../types'
-
-export type TaskWithHistory = Task & { history: TaskHistory[] }
+import type {
+  ActivityTimelineItem,
+  ElectronAPI,
+  ImageOCRInfo,
+  NewTask,
+  OCRLogsPage,
+  SearchMode,
+  SearchOptions,
+  SubtaskCounts,
+  SummaryRequest,
+  SummaryStatsFilters,
+  Task,
+  TaskFilters,
+  TaskHistory,
+  TaskStats,
+  TaskWithHistory,
+  UpdateTask,
+} from '../types'
 
 declare global {
   interface Window {
-    electronAPI: {
-      createTask: (task: NewTask) => Promise<number>
-      updateTask: (taskId: number, task: UpdateTask) => Promise<boolean>
-      deleteTask: (taskId: number) => Promise<boolean>
-      getTask: (taskId: number) => Promise<Task | undefined>
-      listTasks: (filters?: TaskFilters) => Promise<Task[]>
-      listTasksWithHistory: (filters?: { startDate?: string; endDate?: string; dateFilterMode?: string }) => Promise<TaskWithHistory[]>
-      getCounts: (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => Promise<{ all: number; pending: number; in_progress: number; completed: number; cancelled: number }>
-      getEarliestTaskDate: () => Promise<string>
-      listSubtasks: (parentId: number) => Promise<Task[]>
-      getSubtaskCounts: (taskId: number) => Promise<SubtaskCounts>
-      getActivityTimeline: (taskId: number, options?: { limit?: number; offset?: number }) => Promise<ActivityTimelineItem[]>
-      getTaskHistory: (taskId: number, options?: { limit?: number; offset?: number }) => Promise<TaskHistory[]>
-      deleteHistory: (historyId: number) => Promise<boolean>
-      updateHistory: (historyId: number, newValue: string) => Promise<boolean>
-      searchKeyword: (query: string, options?: SearchOptions) => Promise<Task[]>
-      searchSemantic: (query: string, options?: SearchOptions) => Promise<{ error?: string; tasks: Task[] }>
-      searchHybrid: (query: string, options?: SearchOptions) => Promise<{ error?: string; tasks: Task[] }>
-      setApiKey: (apiKey: string) => Promise<boolean>
-      getApiKey: () => Promise<string | null>
-      saveImage: (imageData: string, fileName: string, taskId?: number) => Promise<{ success: boolean; path?: string; error?: string }>
-      searchImage: (query: string, options?: SearchOptions) => Promise<Task[]>
-      loadImage: (imagePath: string) => Promise<{ success: boolean; data?: string; error?: string }>
-      deleteImage: (imagePath: string) => Promise<{ success: boolean; error?: string }>
-      getConfig: () => Promise<{ dataDir: string; customDataDir: string | null }>
-      setDataDir: (dataDir: string | null) => Promise<{ success: boolean; error?: string }>
-      openDirectoryDialog: () => Promise<{ canceled: boolean; filePath: string | null }>
-      focusWindow: () => Promise<boolean>
-      showConfirmDialog: (message: string) => Promise<boolean>
-      getLlmConfig: () => Promise<{ apiKey: string | null; baseUrl: string | null; model: string | null; timeout: number; verifySSL: boolean; promptTemplate: string | null }>
-      setLlmConfig: (config: { apiKey?: string; baseUrl?: string; model?: string; timeout?: number; verifySSL?: boolean; promptTemplate?: string }) => Promise<{ success: boolean; error?: string }>
-      generateSummary: (request: SummaryRequest) => Promise<{ success: boolean; summary?: string; error?: string }>
-      saveFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: string }) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
-      saveBinaryFile: (options: { defaultPath: string; filters: { name: string; extensions: string[] }[]; content: number[] }) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
-      writeImageToClipboard: (imageData: string) => Promise<{ success: boolean; error?: string }>
-      readImageFromClipboard: () => Promise<{ image: string | null; error?: string }>
-      getAppVersion: () => Promise<string>
-      checkForUpdates: () => Promise<{ success: boolean; error?: string }>
-      onOcrProgress: (callback: (progress: { status: string; progress: number; message: string }) => void) => void
-      removeOcrProgressListener: () => void
-      getTaskImageOCRInfo: (taskId: number) => Promise<ImageOCRInfo[]>
-      getOCRLogs: (limit?: number) => Promise<OCRLog[]>
-      retryOCR: (taskId: number, imagePath: string) => Promise<{ success: boolean; error?: string }>
-      openLogFolder: () => Promise<{ success: boolean }>
-    }
+    electronAPI: ElectronAPI
   }
-}
-
-interface ImageOCRInfo {
-  id: number
-  task_id: number
-  image_path: string
-  text_content: string | null
-  ocr_status: string
-  ocr_error: string | null
-  ocr_timestamp: string | null
-  created_at: string
-}
-
-interface OCRLog {
-  id: number
-  task_id: number | null
-  image_path: string | null
-  status: string
-  message: string | null
-  error: string | null
-  timestamp: string
 }
 
 const getElectronAPI = () => {
@@ -101,6 +51,11 @@ export const taskApi = {
     if (!api) throw new Error('electronAPI not available')
     return api.getTask(id)
   },
+  getMany: async (ids: number[]): Promise<Task[]> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getTasks(ids)
+  },
   list: async (filters?: TaskFilters): Promise<Task[]> => {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
@@ -116,6 +71,11 @@ export const taskApi = {
     if (!api) throw new Error('electronAPI not available')
     return api.getCounts(filters)
   },
+  getSummaryStats: async (filters?: SummaryStatsFilters): Promise<TaskStats> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getSummaryStats(filters)
+  },
   getEarliestDate: async (): Promise<string> => {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
@@ -130,6 +90,11 @@ export const taskApi = {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
     return api.getSubtaskCounts(taskId)
+  },
+  getSubtaskCountsBatch: async (taskIds: number[]): Promise<Record<number, SubtaskCounts>> => {
+    const api = getElectronAPI()
+    if (!api) throw new Error('electronAPI not available')
+    return api.getSubtaskCountsBatch(taskIds)
   },
   getActivityTimeline: async (taskId: number, options?: { limit?: number; offset?: number }): Promise<ActivityTimelineItem[]> => {
     const api = getElectronAPI()
@@ -202,10 +167,8 @@ export const imageApi = {
     return result.success ? result.path || null : null
   },
   load: async (imagePath: string): Promise<string | null> => {
-    const api = getElectronAPI()
-    if (!api) throw new Error('electronAPI not available')
-    const result = await api.loadImage(imagePath)
-    return result.success ? result.data || null : null
+    if (!imagePath) return null
+    return `app-image://local/${encodeURIComponent(imagePath)}`
   },
   delete: async (imagePath: string): Promise<boolean> => {
     const api = getElectronAPI()
@@ -270,10 +233,19 @@ export const ocrApi = {
     if (!api) throw new Error('electronAPI not available')
     return api.getTaskImageOCRInfo(taskId)
   },
-  getLogs: async (limit?: number): Promise<OCRLog[]> => {
+  getLogs: async (options?: number | { limit?: number; offset?: number }): Promise<OCRLogsPage> => {
     const api = getElectronAPI()
     if (!api) throw new Error('electronAPI not available')
-    return api.getOCRLogs(limit)
+    const result = await api.getOCRLogs(options)
+    if (Array.isArray(result)) {
+      return {
+        logs: result,
+        total: result.length,
+        limit: typeof options === 'number' ? options : result.length,
+        offset: 0,
+      }
+    }
+    return result
   },
   retry: async (taskId: number, imagePath: string): Promise<{ success: boolean; error?: string }> => {
     const api = getElectronAPI()

@@ -25,15 +25,15 @@ async function getEmbedder() {
         try {
           const modelsDir = getModelsDir()
           const localModelPath = path.join(modelsDir, MODEL_NAME)
-          logger.info('[Embedding] Models directory:', modelsDir)
-          logger.info('[Embedding] Model path:', localModelPath)
+          logger.debug('[Embedding] Models directory:', modelsDir)
+          logger.debug('[Embedding] Model path:', localModelPath)
           
           const modelDirExists = fs.existsSync(localModelPath)
-          logger.info('[Embedding] Model directory exists:', modelDirExists)
+          logger.debug('[Embedding] Model directory exists:', modelDirExists)
           
           if (modelDirExists) {
             const files = fs.readdirSync(localModelPath)
-            logger.info('[Embedding] Model directory files:', files.join(', '))
+            logger.debug('[Embedding] Model directory files:', files.join(', '))
           }
           
           const transformers = await (eval('import("@xenova/transformers")') as Promise<typeof import('@xenova/transformers')>)
@@ -42,12 +42,12 @@ async function getEmbedder() {
           transformers.env.useBrowserCache = false
           transformers.env.localModelPath = modelsDir
           ;(transformers.env as any).localModelOnly = true
-          logger.info('[Embedding] Transformers env configured')
+          logger.debug('[Embedding] Transformers env configured')
           
           const pipeline = transformers.pipeline
           embedder = await pipeline('feature-extraction', MODEL_NAME, {
             progress_callback: (progress: { status: string }) => {
-              logger.info('[Embedding] Model loading progress:', progress.status)
+              logger.debug('[Embedding] Model loading progress:', progress.status)
             },
             local_files_only: true,
           }) as any
@@ -65,14 +65,12 @@ async function getEmbedder() {
 
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
-    logger.info('[Embedding] Generating embedding for text length:', text.length)
+    logger.debug('[Embedding] Generating embedding for text length:', text.length)
     const extractor = await getEmbedder()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const output = await (extractor as any)(text, { pooling: 'mean', normalize: true })
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tensor = output as any
     const embedding = Array.from(tensor.data as Float32Array)
-    logger.info('[Embedding] Generated embedding, dimension:', embedding.length)
+    logger.debug('[Embedding] Generated embedding, dimension:', embedding.length)
     return embedding
   } catch (error) {
     logger.error('[Embedding] Failed to generate embedding:', error)
