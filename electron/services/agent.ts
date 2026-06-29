@@ -1,6 +1,6 @@
 import type { WebContents } from 'electron'
 import { ChatStore, type ChatMessage } from './chatStore'
-import { AgentToolsDispatcher, needsHITL, TOOL_DEFINITIONS, type ToolCall } from './agentTools'
+import { AgentToolsDispatcher, needsHITL, TOOL_DEFINITIONS, type AgentImageAttachment, type ToolCall } from './agentTools'
 import { SystemPromptBuilder } from './systemPrompt'
 import { streamChatCompletions } from './llmRequest'
 import type { LLMConfig } from './config'
@@ -53,16 +53,23 @@ export class AgentService {
     }
   }
 
-  async runChat(sessionId: string, requestId: string, userMessageContent: string, sender: WebContents): Promise<void> {
+  async runChat(
+    sessionId: string,
+    requestId: string,
+    userMessageContent: string,
+    sender: WebContents,
+    attachments: AgentImageAttachment[] = []
+  ): Promise<void> {
     const controller = new AbortController()
     this.activeStreams.set(requestId, controller)
 
     try {
       this.chatStore.ensureSession(sessionId)
+      const persistedUserContent = appendAttachmentNote(userMessageContent, attachments)
       this.chatStore.appendMessage({
         session_id: sessionId,
         role: 'user',
-        content: userMessageContent,
+        content: persistedUserContent,
         is_hidden: 0,
       })
 
@@ -132,7 +139,7 @@ export class AgentService {
             return
           }
 
-          const result = await this.executeToolWithHITL(toolCall, requestId, sessionId, assistantMsg.id, sender)
+          const result = await this.executeToolWithHITL(toolCall, requestId, sessionId, assistantMsg.id, sender, attachments)
           const content = JSON.stringify(result)
 
           this.chatStore.appendMessage({
@@ -182,7 +189,8 @@ export class AgentService {
     requestId: string,
     sessionId: string,
     messageId: string,
-    sender: WebContents
+    sender: WebContents,
+    attachments: AgentImageAttachment[]
   ): Promise<unknown> {
     if (needsHITL(toolCall.name)) {
       sender.send('agent:stream:hitl-required', {
@@ -209,7 +217,7 @@ export class AgentService {
       args: toolCall.args,
     })
 
-    const result = await this.dispatcher.execute(toolCall, { sessionId, messageId })
+    const result = await this.dispatcher.execute(toolCall, { sessionId, messageId, attachments })
     sender.send('agent:stream:result', {
       requestId,
       toolName: toolCall.name,
@@ -259,4 +267,28 @@ function toOpenAIToolCall(toolCall: ToolCall): OpenAIToolCall {
       arguments: JSON.stringify(toolCall.args),
     },
   }
+}
+
+function appendAttachmentNote(content: string, attachments: AgentImageAttachment[]): string {
+  const imageRefs = attachments
+    .filter(attachment => attachment.kind === 'image' && attachment.path)
+    .map(attachment => `![${sanitizeImageAlt(attachment.name)}](local://${attachment.path})`)
+
+  if (imageRefs.length === 0) {
+    return content
+  }
+
+  const note = [
+    '',
+    '已附加图片:',
+    ...imageRefs,
+    '',
+    '如果本次请求创建或更新任务，请直接调用任务工具。系统支持把这些图片放入任务描述，工具会自动保留 local:// 图片引用。',
+  ].join('\n')
+
+  return `${content.trim()}${note}`
+}
+
+function sanitizeImageAlt(name: string): string {
+  return (name || 'image').replace(/[\r\n\]]/g, ' ').trim() || 'image'
 }

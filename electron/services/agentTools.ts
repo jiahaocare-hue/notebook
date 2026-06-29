@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { ActivityLedger, bumpTasksWriteVersion, type ActivityEventType } from './activityLedger'
+import { extractLocalImagePaths } from './images'
 
 const STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const
 const PRIORITIES = ['low', 'medium', 'high'] as const
@@ -22,6 +23,18 @@ export interface ToolResult {
 }
 
 export type UpdateEmbeddingFn = (taskId: number, title: string, description: string | null) => Promise<void>
+
+export interface AgentImageAttachment {
+  kind: 'image'
+  name: string
+  path: string
+}
+
+type ToolExecutionContext = {
+  sessionId: string
+  messageId: string
+  attachments?: AgentImageAttachment[]
+}
 
 type ValidTaskInput = {
   title: string
@@ -46,12 +59,17 @@ type TaskRow = {
   updated_at: string
 }
 
+type SubtaskRow = TaskRow & {
+  depth: number
+  parent_chain: number[]
+}
+
 export const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
       name: 'create_task',
-      description: '创建单个任务，支持标题、描述、状态、优先级、截止日期和父任务 ID。',
+      description: '创建单个任务，支持标题、描述、状态、优先级、截止日期、父任务 ID，以及本轮对话中附加的图片。若用户要求把图片放入任务，工具会自动把图片引用追加到描述中。',
       parameters: {
         type: 'object',
         properties: {
@@ -71,7 +89,7 @@ export const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'batch_create_tasks',
-      description: '批量创建多个任务。适合用户一次说出多个待办事项，单次最多 20 个。',
+      description: '批量创建多个任务。适合用户一次说出多个待办事项，单次最多 20 个。若本轮对话有图片附件，工具会自动把图片引用追加到任务描述中。',
       parameters: {
         type: 'object',
         properties: {
@@ -100,7 +118,7 @@ export const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'update_task',
-      description: '更新指定任务。完成任务请设置 status=completed。',
+      description: '更新指定任务。完成任务请设置 status=completed。若用户要求把本轮图片放入已有任务，工具会自动把图片引用追加到描述中。',
       parameters: {
         type: 'object',
         properties: {
@@ -148,6 +166,20 @@ export const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
+      name: 'list_subtasks',
+      description: '递归查询指定父任务下面的所有子任务、子任务的子任务，以及任务里的拆解事项。用户询问“某任务下面/里面有哪些子任务”时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'integer', description: '父任务 ID' },
+        },
+        required: ['taskId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'query_tasks',
       description: '按状态、优先级、创建日期范围查询任务。',
       parameters: {
@@ -166,7 +198,7 @@ export const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'search_tasks',
-      description: '通过关键词搜索任务标题和描述。',
+      description: '通过关键词搜索任务标题、描述和图片 OCR 文字。',
       parameters: {
         type: 'object',
         properties: {
@@ -212,7 +244,7 @@ export class AgentToolsDispatcher {
     private updateTaskEmbedding: UpdateEmbeddingFn
   ) {}
 
-  async execute(toolCall: ToolCall, context: { sessionId: string; messageId: string }): Promise<ToolResult> {
+  async execute(toolCall: ToolCall, context: ToolExecutionContext): Promise<ToolResult> {
     if (['create_task', 'batch_create_tasks', 'update_task', 'delete_task'].includes(toolCall.name)) {
       const existing = this.activityLedger.findByToolCallId(toolCall.id)
       if (existing) {
@@ -227,11 +259,13 @@ export class AgentToolsDispatcher {
         case 'batch_create_tasks':
           return this.batchCreateTasks(validateBatchCreateArgs(toolCall.args), toolCall.id, context)
         case 'update_task':
-          return this.updateTask(validateUpdateTaskArgs(toolCall.args), toolCall.id, context)
+          return this.updateTask(validateUpdateTaskArgs(toolCall.args, Boolean(context.attachments?.length)), toolCall.id, context)
         case 'delete_task':
           return this.deleteTask(validateDeleteTaskArgs(toolCall.args), toolCall.id, context)
         case 'get_task':
           return this.getTask(validateTaskIdArgs(toolCall.args).taskId)
+        case 'list_subtasks':
+          return this.listSubtasks(validateTaskIdArgs(toolCall.args).taskId)
         case 'query_tasks':
           return this.queryTasks(validateQueryTasksArgs(toolCall.args))
         case 'search_tasks':
@@ -250,8 +284,10 @@ export class AgentToolsDispatcher {
     }
   }
 
-  private createTask(args: ValidTaskInput, toolCallId: string, context: { sessionId: string; messageId: string }): ToolResult {
+  private createTask(args: ValidTaskInput, toolCallId: string, context: ToolExecutionContext): ToolResult {
+    args.description = appendImageAttachments(args.description, context.attachments)
     const task = insertTask(this.db, args)
+    attachDescriptionImagesToTask(this.db, task.id, task.description)
     addHistoryRecord(this.db, task.id, 'created', null, {
       title: task.title,
       description: task.description,
@@ -276,12 +312,17 @@ export class AgentToolsDispatcher {
     return { success: true, data: task }
   }
 
-  private batchCreateTasks(args: { tasks: ValidTaskInput[] }, toolCallId: string, context: { sessionId: string; messageId: string }): ToolResult {
+  private batchCreateTasks(args: { tasks: ValidTaskInput[] }, toolCallId: string, context: ToolExecutionContext): ToolResult {
+    const tasksWithAttachments = args.tasks.map(task => ({
+      ...task,
+      description: appendImageAttachments(task.description, context.attachments),
+    }))
     const createdTasks = this.db.transaction((tasks: ValidTaskInput[]) => {
       return tasks.map(task => insertTask(this.db, task))
-    })(args.tasks) as TaskRow[]
+    })(tasksWithAttachments) as TaskRow[]
 
     for (const task of createdTasks) {
+      attachDescriptionImagesToTask(this.db, task.id, task.description)
       addHistoryRecord(this.db, task.id, 'created', null, task)
       this.activityLedger.recordEvent({
         task_id: task.id,
@@ -301,10 +342,17 @@ export class AgentToolsDispatcher {
     return { success: true, data: { count: createdTasks.length, tasks: createdTasks } }
   }
 
-  private updateTask(args: { taskId: number; updates: Partial<ValidTaskInput> }, toolCallId: string, context: { sessionId: string; messageId: string }): ToolResult {
+  private updateTask(args: { taskId: number; updates: Partial<ValidTaskInput> }, toolCallId: string, context: ToolExecutionContext): ToolResult {
     const oldTask = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(args.taskId) as TaskRow | undefined
     if (!oldTask) {
       return { success: false, error: `任务 #${args.taskId} 不存在` }
+    }
+
+    if (context.attachments?.length) {
+      args.updates.description = appendImageAttachments(
+        args.updates.description !== undefined ? args.updates.description : oldTask.description ?? undefined,
+        context.attachments
+      )
     }
 
     const fields: string[] = []
@@ -333,6 +381,7 @@ export class AgentToolsDispatcher {
     fields.push('updated_at = CURRENT_TIMESTAMP')
     this.db.prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values, args.taskId)
     const newTask = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(args.taskId) as TaskRow
+    attachDescriptionImagesToTask(this.db, newTask.id, newTask.description)
     const eventType: ActivityEventType = args.updates.status !== undefined && args.updates.status !== oldTask.status
       ? 'task_status_changed'
       : 'task_updated'
@@ -402,6 +451,26 @@ export class AgentToolsDispatcher {
     return { success: true, data: { task, activity } }
   }
 
+  private listSubtasks(taskId: number): ToolResult {
+    const parent = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined
+    if (!parent) {
+      return { success: false, error: `任务 #${taskId} 不存在` }
+    }
+
+    const result = collectSubtaskTree(this.db, taskId, 200)
+    const completed = result.tasks.filter(task => task.status === 'completed').length
+    return {
+      success: true,
+      data: {
+        parent,
+        count: result.tasks.length,
+        completed,
+        tasks: result.tasks,
+        truncated: result.truncated,
+      },
+    }
+  }
+
   private queryTasks(args: { status?: TaskStatus; priority?: TaskPriority; startDate?: string; endDate?: string; limit: number }): ToolResult {
     let sql = 'SELECT * FROM tasks WHERE parent_id IS NULL'
     const params: (string | number)[] = []
@@ -430,14 +499,32 @@ export class AgentToolsDispatcher {
   }
 
   private searchTasks(args: { query: string; limit: number }): ToolResult {
-    const like = `%${args.query}%`
+    const rawLike = `%${args.query}%`
+    const compactLike = `%${compactSearchText(args.query)}%`
+    const compactTitle = compactTextSql('title')
+    const compactDescription = compactTextSql('description')
+    const compactOcrText = compactTextSql('it.text_content')
     const tasks = this.db.prepare(`
       SELECT *
       FROM tasks
-      WHERE parent_id IS NULL AND (title LIKE ? OR COALESCE(description, '') LIKE ?)
+      WHERE parent_id IS NULL AND (
+        title LIKE ?
+        OR COALESCE(description, '') LIKE ?
+        OR ${compactTitle} LIKE ?
+        OR ${compactDescription} LIKE ?
+        OR EXISTS (
+          SELECT 1
+          FROM image_texts it
+          WHERE it.task_id = tasks.id
+            AND (
+              COALESCE(it.text_content, '') LIKE ?
+              OR ${compactOcrText} LIKE ?
+            )
+        )
+      )
       ORDER BY updated_at DESC, created_at DESC
       LIMIT ?
-    `).all(like, like, args.limit) as TaskRow[]
+    `).all(rawLike, rawLike, compactLike, compactLike, rawLike, compactLike, args.limit) as TaskRow[]
     return { success: true, data: { count: tasks.length, tasks } }
   }
 
@@ -474,7 +561,7 @@ function validateBatchCreateArgs(args: Record<string, unknown>): { tasks: ValidT
   return { tasks: args.tasks.map(task => validateTaskInput(toObject(task))) }
 }
 
-function validateUpdateTaskArgs(args: Record<string, unknown>): { taskId: number; updates: Partial<ValidTaskInput> } {
+function validateUpdateTaskArgs(args: Record<string, unknown>, allowEmptyUpdates = false): { taskId: number; updates: Partial<ValidTaskInput> } {
   const taskId = readRequiredInteger(args, 'taskId')
   const updates: Partial<ValidTaskInput> = {}
 
@@ -497,7 +584,7 @@ function validateUpdateTaskArgs(args: Record<string, unknown>): { taskId: number
     updates.parent_id = readOptionalInteger(args, 'parent_id')
   }
 
-  if (Object.keys(updates).length === 0) {
+  if (!allowEmptyUpdates && Object.keys(updates).length === 0) {
     throw new Error('update_task: 至少需要提供一个要更新的字段')
   }
 
@@ -571,6 +658,48 @@ function insertTask(db: Database.Database, args: ValidTaskInput): TaskRow {
   return db.prepare('SELECT * FROM tasks WHERE id = ?').get(Number(result.lastInsertRowid)) as TaskRow
 }
 
+function compactSearchText(value: string): string {
+  return value.replace(/[\s\u3000]+/g, '')
+}
+
+function compactTextSql(column: string): string {
+  return `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(${column}, ''), ' ', ''), char(9), ''), char(10), ''), char(13), ''), char(12288), '')`
+}
+
+function appendImageAttachments(description: string | undefined, attachments?: AgentImageAttachment[]): string | undefined {
+  const validAttachments = attachments?.filter(attachment => (
+    attachment.kind === 'image' &&
+    typeof attachment.path === 'string' &&
+    attachment.path.trim()
+  )) ?? []
+
+  if (validAttachments.length === 0) {
+    return description
+  }
+
+  const existingDescription = description?.trim() ?? ''
+  const imageRefs = validAttachments
+    .filter(attachment => !existingDescription.includes(`local://${attachment.path}`))
+    .map(attachment => `![${sanitizeImageAlt(attachment.name)}](local://${attachment.path})`)
+
+  if (imageRefs.length === 0) {
+    return description
+  }
+
+  return existingDescription ? `${existingDescription}\n\n${imageRefs.join('\n')}` : imageRefs.join('\n')
+}
+
+function sanitizeImageAlt(name: string): string {
+  return (name || 'image').replace(/[\r\n\]]/g, ' ').trim() || 'image'
+}
+
+function attachDescriptionImagesToTask(db: Database.Database, taskId: number, description: string | null): void {
+  for (const imagePath of extractLocalImagePaths(description)) {
+    db.prepare('UPDATE image_texts SET task_id = ? WHERE image_path = ? AND (task_id IS NULL OR task_id = 0)').run(taskId, imagePath)
+    db.prepare('UPDATE ocr_logs SET task_id = ? WHERE image_path = ? AND (task_id IS NULL OR task_id = 0)').run(taskId, imagePath)
+  }
+}
+
 function addHistoryRecord(db: Database.Database, taskId: number, action: string, oldValue: unknown, newValue: unknown): void {
   db.prepare('INSERT INTO task_history (task_id, action, old_value, new_value) VALUES (?, ?, ?, ?)')
     .run(taskId, action, serializeHistoryValue(oldValue), serializeHistoryValue(newValue))
@@ -579,6 +708,47 @@ function addHistoryRecord(db: Database.Database, taskId: number, action: string,
 function collectSubtaskIds(db: Database.Database, parentId: number): number[] {
   const rows = db.prepare('SELECT id FROM tasks WHERE parent_id = ?').all(parentId) as { id: number }[]
   return rows.flatMap(row => [row.id, ...collectSubtaskIds(db, row.id)])
+}
+
+function collectSubtaskTree(db: Database.Database, parentId: number, maxTasks: number): { tasks: SubtaskRow[]; truncated: boolean } {
+  const tasks: SubtaskRow[] = []
+  const visited = new Set<number>([parentId])
+  let truncated = false
+
+  const visit = (currentParentId: number, depth: number, parentChain: number[]): void => {
+    if (tasks.length >= maxTasks) {
+      truncated = true
+      return
+    }
+
+    const rows = db.prepare(`
+      SELECT *
+      FROM tasks
+      WHERE parent_id = ?
+      ORDER BY sort_order ASC, created_at ASC
+    `).all(currentParentId) as TaskRow[]
+
+    for (const row of rows) {
+      if (visited.has(row.id)) {
+        continue
+      }
+      if (tasks.length >= maxTasks) {
+        truncated = true
+        return
+      }
+
+      visited.add(row.id)
+      tasks.push({
+        ...row,
+        depth,
+        parent_chain: parentChain,
+      })
+      visit(row.id, depth + 1, [...parentChain, row.id])
+    }
+  }
+
+  visit(parentId, 1, [parentId])
+  return { tasks, truncated }
 }
 
 function serializeHistoryValue(value: unknown): string | null {

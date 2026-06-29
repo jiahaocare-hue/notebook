@@ -302,8 +302,14 @@ export interface ParsedToolCall {
   args: Record<string, unknown>
 }
 
+export interface AgentImageAttachment {
+  kind: 'image'
+  name: string
+  path: string
+}
+
 export type MessageDisplayItem =
-  | { kind: 'user'; id: string; content: string }
+  | { kind: 'user'; id: string; content: string; attachments?: AgentImageAttachment[] }
   | { kind: 'assistant'; id: string; content: string; error?: boolean }
   | { kind: 'tool-bubble'; id: string; toolName: string; args: unknown; result?: unknown; status: 'running' | 'done' | 'error' }
   | { kind: 'hitl-card'; id: string; toolName: string; args: unknown; toolCallId: string; requestId: string; decided?: boolean }
@@ -312,6 +318,7 @@ export interface AgentChatPayload {
   sessionId: string
   message: string
   requestId: string
+  attachments?: AgentImageAttachment[]
 }
 
 export interface AgentApi {

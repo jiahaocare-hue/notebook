@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react'
 import { Task, NewTask, UpdateTask, StatusFilter, DateFilter, DateFilterMode } from '../../types'
 import { useTaskContext } from '../../context/TaskContext'
 import TaskCard from '../../components/TaskCard'
@@ -18,6 +18,30 @@ interface TodayTasksProps {
   dateFilter: DateFilter
 }
 
+interface PendingScrollRestore {
+  taskId: number
+  scrollTop: number
+  topOffset: number
+  scrollContainer: HTMLElement | null
+}
+
+const getScrollContainer = (element: HTMLElement): HTMLElement | null => {
+  let parent = element.parentElement
+
+  while (parent) {
+    const style = window.getComputedStyle(parent)
+    const canScrollY = /(auto|scroll|overlay)/.test(style.overflowY)
+
+    if (canScrollY && parent.scrollHeight > parent.clientHeight) {
+      return parent
+    }
+
+    parent = parent.parentElement
+  }
+
+  return document.scrollingElement as HTMLElement | null
+}
+
 const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => {
   const { tasks, loading, refreshTasks, refreshCounts, createTask, updateTask, deleteTask } = useTaskContext()
   const [error, setError] = useState<string | null>(null)
@@ -29,6 +53,8 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [taskToDelete, setTaskToDelete] = useState<number | null>(null)
   const [subtaskCounts, setSubtaskCounts] = useState<Record<number, { total: number; completed: number }>>({})
+  const listContainerRef = useRef<HTMLDivElement>(null)
+  const pendingScrollRestoreRef = useRef<PendingScrollRestore | null>(null)
 
   const [historyStartDate, setHistoryStartDate] = useState<string>(() => {
     const date = new Date()
@@ -190,6 +216,52 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
     return sorted
   }, [filteredTasks, sortType, sortOrder])
 
+  const captureTaskScrollPosition = useCallback((taskId: number) => {
+    const card = listContainerRef.current?.querySelector<HTMLElement>(`[data-task-card-id="${taskId}"]`)
+
+    if (!card) {
+      pendingScrollRestoreRef.current = null
+      return
+    }
+
+    const scrollContainer = getScrollContainer(card)
+    const containerTop = scrollContainer?.getBoundingClientRect().top ?? 0
+
+    pendingScrollRestoreRef.current = {
+      taskId,
+      scrollTop: scrollContainer?.scrollTop ?? 0,
+      topOffset: card.getBoundingClientRect().top - containerTop,
+      scrollContainer,
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    const pending = pendingScrollRestoreRef.current
+
+    if (!pending) {
+      return
+    }
+
+    const card = listContainerRef.current?.querySelector<HTMLElement>(`[data-task-card-id="${pending.taskId}"]`)
+    const scrollContainer = pending.scrollContainer && document.contains(pending.scrollContainer)
+      ? pending.scrollContainer
+      : card
+        ? getScrollContainer(card)
+        : null
+
+    if (scrollContainer) {
+      if (card) {
+        const containerTop = scrollContainer.getBoundingClientRect().top
+        const currentTopOffset = card.getBoundingClientRect().top - containerTop
+        scrollContainer.scrollTop += currentTopOffset - pending.topOffset
+      } else {
+        scrollContainer.scrollTop = pending.scrollTop
+      }
+    }
+
+    pendingScrollRestoreRef.current = null
+  }, [sortedTasks])
+
   const handleTaskClick = (task: Task) => {
     setSelectedTask(task)
     setShowDetailModal(true)
@@ -241,7 +313,8 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
       })
       // 刷新任务列表和计数
       const filters = getFilters()
-      await refreshTasks(filters)
+      captureTaskScrollPosition(updatedTask.id)
+      await refreshTasks(filters, false)
       
       // 只传递日期筛选条件给 refreshCounts
       const dateFilters: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string } = {}
@@ -467,15 +540,16 @@ const TodayTasks: React.FC<TodayTasksProps> = ({ statusFilter, dateFilter }) => 
           </button>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div ref={listContainerRef} className="space-y-3">
           {sortedTasks.map((task) => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              onClick={handleTaskClick}
-              subtaskCount={subtaskCounts[task.id]?.total}
-              subtaskCompleted={subtaskCounts[task.id]?.completed}
-            />
+            <div key={task.id} data-task-card-id={task.id}>
+              <TaskCard
+                task={task}
+                onClick={handleTaskClick}
+                subtaskCount={subtaskCounts[task.id]?.total}
+                subtaskCompleted={subtaskCounts[task.id]?.completed}
+              />
+            </div>
           ))}
         </div>
       )}

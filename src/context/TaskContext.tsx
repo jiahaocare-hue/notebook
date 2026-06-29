@@ -16,7 +16,7 @@ interface TaskContextType {
   loading: boolean
   taskCounts: TaskCounts
   totalTaskCounts: TaskCounts
-  refreshTasks: (filters?: Record<string, string>) => Promise<void>
+  refreshTasks: (filters?: Record<string, string>, showLoading?: boolean) => Promise<void>
   refreshCounts: (filters?: { date?: string; startDate?: string; endDate?: string; dateFilterMode?: string }) => Promise<void>
   createTask: (task: NewTask) => Promise<number>
   updateTask: (id: number, task: UpdateTask) => Promise<boolean>

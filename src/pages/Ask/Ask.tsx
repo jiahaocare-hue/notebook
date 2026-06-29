@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { agentApi, chatApi } from '../../ipc/agent'
-import { taskApi } from '../../ipc/tasks'
+import { imageApi, taskApi } from '../../ipc/tasks'
 import Modal from '../../components/Modal'
 import TaskDetail from '../../components/TaskDetail'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
-import type { ChatMessage, ChatSession, MessageDisplayItem, ParsedToolCall, Task } from '../../types'
+import type { AgentImageAttachment, ChatMessage, ChatSession, MessageDisplayItem, ParsedToolCall, Task } from '../../types'
 
 const quickPrompts = [
   '现在有多少个进行中的任务？',
@@ -19,6 +19,7 @@ const toolLabels: Record<string, string> = {
   update_task: '更新任务',
   delete_task: '删除任务',
   get_task: '读取任务',
+  list_subtasks: '查询子任务',
   query_tasks: '查询任务',
   search_tasks: '搜索任务',
   query_activity: '查询账本',
@@ -27,6 +28,12 @@ const toolLabels: Record<string, string> = {
 type RelatedPanelItem =
   | { kind: 'task'; id: string; task: Task; source: string }
   | { kind: 'activity'; id: string; eventType: string; taskId: number | null; title: string; time: string | null; source: string }
+
+type PendingImageAttachment = {
+  id: string
+  name: string
+  dataUrl: string
+}
 
 const Ask: React.FC = () => {
   const [sessions, setSessions] = useState<ChatSession[]>([])
@@ -38,8 +45,10 @@ const Ask: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [showDetailModal, setShowDetailModal] = useState(false)
   const [deleteTaskId, setDeleteTaskId] = useState<number | null>(null)
+  const [pendingImages, setPendingImages] = useState<PendingImageAttachment[]>([])
   const requestIdRef = useRef<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const activeSession = useMemo(
     () => sessions.find(session => session.id === activeSessionId) ?? null,
@@ -162,9 +171,52 @@ const Ask: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [displayItems])
 
+  const addImageFile = useCallback(async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      return
+    }
+
+    const dataUrl = await readFileAsDataUrl(file)
+    setPendingImages(prev => [
+      ...prev,
+      {
+        id: createRequestId(),
+        name: file.name || 'image.png',
+        dataUrl,
+      },
+    ])
+  }, [])
+
+  const handleImageSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? [])
+    for (const file of files) {
+      await addImageFile(file)
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  const handleInputPaste = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = Array.from(event.clipboardData.files).filter(file => file.type.startsWith('image/'))
+    if (imageFiles.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    for (const file of imageFiles) {
+      await addImageFile(file)
+    }
+  }
+
+  const removePendingImage = (id: string) => {
+    setPendingImages(prev => prev.filter(image => image.id !== id))
+  }
+
   const sendMessage = async (override?: string) => {
     const message = (override ?? input).trim()
-    if (!message || isStreaming) {
+    const imagesToSend = override ? [] : pendingImages
+    if ((!message && imagesToSend.length === 0) || isStreaming) {
       return
     }
 
@@ -179,12 +231,25 @@ const Ask: React.FC = () => {
     const requestId = createRequestId()
     requestIdRef.current = requestId
     setIsStreaming(true)
-    setInput('')
-    setDisplayItems(prev => [
-      ...prev,
-      { kind: 'user', id: `user-${requestId}`, content: message },
-    ])
-    agentApi.chat({ sessionId, message, requestId })
+    try {
+      const attachments = await savePendingImages(imagesToSend)
+      const finalMessage = message || 'Create a task with the attached image.'
+      setInput('')
+      setPendingImages([])
+      setDisplayItems(prev => [
+        ...prev,
+        { kind: 'user', id: `user-${requestId}`, content: finalMessage, attachments },
+      ])
+      agentApi.chat({ sessionId, message: finalMessage, requestId, attachments })
+    } catch (error) {
+      console.error('Failed to send agent message:', error)
+      setDisplayItems(prev => [
+        ...prev,
+        { kind: 'assistant', id: `error-${requestId}`, content: error instanceof Error ? error.message : 'Failed to save image attachments', error: true },
+      ])
+      requestIdRef.current = null
+      setIsStreaming(false)
+    }
   }
 
   const stopStreaming = () => {
@@ -373,10 +438,47 @@ const Ask: React.FC = () => {
         </div>
 
         <div className="p-4 border-t border-gray-100 dark:border-gray-700">
+          {pendingImages.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {pendingImages.map(image => (
+                <div key={image.id} className="relative h-16 w-16 overflow-hidden rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900">
+                  <img src={image.dataUrl} alt={image.name} className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => removePendingImage(image.id)}
+                    disabled={isStreaming}
+                    className="absolute right-0.5 top-0.5 h-5 w-5 rounded-full bg-black/60 text-xs leading-5 text-white hover:bg-black/75 disabled:opacity-50"
+                    title="Remove image"
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handleImageSelect}
+            className="hidden"
+            disabled={isStreaming}
+          />
           <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isStreaming}
+              className="px-3 py-3 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+              title="Add image"
+            >
+              +
+            </button>
             <textarea
               value={input}
               onChange={event => setInput(event.target.value)}
+              onPaste={handleInputPaste}
               onKeyDown={event => {
                 if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                   event.preventDefault()
@@ -390,7 +492,7 @@ const Ask: React.FC = () => {
             />
             <button
               onClick={() => sendMessage()}
-              disabled={!input.trim() || isStreaming}
+              disabled={(!input.trim() && pendingImages.length === 0) || isStreaming}
               className="px-5 py-3 rounded-lg bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               发送
@@ -495,6 +597,18 @@ function DisplayItem({
       <div className="flex justify-end">
         <div className="max-w-[78%] rounded-lg px-4 py-3 bg-blue-500 text-white text-sm leading-6 whitespace-pre-wrap">
           {item.content}
+          {item.attachments && item.attachments.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {item.attachments.map(attachment => (
+                <img
+                  key={attachment.path}
+                  src={`app-image://local/${encodeURIComponent(attachment.path)}`}
+                  alt={attachment.name}
+                  className="h-20 w-20 rounded-md object-cover border border-white/30"
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     )
@@ -680,7 +794,8 @@ function displayItemsFromMessages(messages: ChatMessage[]): MessageDisplayItem[]
       continue
     }
     if (message.role === 'user') {
-      items.push({ kind: 'user', id: message.id, content: message.content ?? '' })
+      const userDisplay = parseUserMessageForDisplay(message.content ?? '')
+      items.push({ kind: 'user', id: message.id, content: userDisplay.content, attachments: userDisplay.attachments })
       continue
     }
     if (message.role === 'assistant') {
@@ -701,6 +816,44 @@ function displayItemsFromMessages(messages: ChatMessage[]): MessageDisplayItem[]
     }
   }
   return items
+}
+
+function parseUserMessageForDisplay(content: string): { content: string; attachments?: AgentImageAttachment[] } {
+  const attachments = extractLocalImageAttachments(content)
+  const cleanedContent = stripPersistedAttachmentNote(content).trim()
+
+  return {
+    content: cleanedContent || content,
+    attachments: attachments.length > 0 ? attachments : undefined,
+  }
+}
+
+function extractLocalImageAttachments(content: string): AgentImageAttachment[] {
+  const attachments: AgentImageAttachment[] = []
+  const seenPaths = new Set<string>()
+  const imageRegex = /!\[([^\]]*)\]\(local:\/\/([^)]+)\)/g
+  let match: RegExpExecArray | null
+
+  while ((match = imageRegex.exec(content)) !== null) {
+    const path = match[2]?.trim()
+    if (!path || seenPaths.has(path)) {
+      continue
+    }
+    seenPaths.add(path)
+    attachments.push({
+      kind: 'image',
+      name: match[1]?.trim() || 'image',
+      path,
+    })
+  }
+
+  return attachments
+}
+
+function stripPersistedAttachmentNote(content: string): string {
+  return content
+    .replace(/\n*已附加图片:\n(?:!\[[^\]]*]\(local:\/\/[^)]+\)\n?)+\n如果本次请求创建或更新任务，请直接调用任务工具。系统支持把这些图片放入任务描述，工具会自动保留 local:\/\/ 图片引用。/g, '')
+    .replace(/\n*Attached images:\n(?:!\[[^\]]*]\(local:\/\/[^)]+\)\n?)+\nWhen creating or updating a task from this request, keep these image references in the task description\.?/g, '')
 }
 
 function parseToolCalls(raw: string | null): ParsedToolCall[] {
@@ -781,6 +934,40 @@ function isToolResultError(result: unknown): boolean {
 
 function createRequestId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+      } else {
+        reject(new Error('Failed to read image file'))
+      }
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read image file'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function savePendingImages(images: PendingImageAttachment[]): Promise<AgentImageAttachment[]> {
+  const attachments: AgentImageAttachment[] = []
+
+  for (const image of images) {
+    const savedPath = await imageApi.save(image.dataUrl, image.name)
+    if (!savedPath) {
+      throw new Error(`Failed to save image: ${image.name}`)
+    }
+
+    attachments.push({
+      kind: 'image',
+      name: image.name,
+      path: savedPath,
+    })
+  }
+
+  return attachments
 }
 
 function formatDate(value: string): string {

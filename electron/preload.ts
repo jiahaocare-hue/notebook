@@ -89,7 +89,7 @@ const electronAPI: ElectronAPI = {
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)
 
 contextBridge.exposeInMainWorld('agentApi', {
-  chat: (payload: { sessionId: string; message: string; requestId: string }) => {
+  chat: (payload: { sessionId: string; message: string; requestId: string; attachments?: { kind: 'image'; name: string; path: string }[] }) => {
     ipcRenderer.send('agent:chat', payload)
   },
   stop: (requestId: string) => {

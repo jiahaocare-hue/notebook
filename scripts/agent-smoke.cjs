@@ -209,6 +209,120 @@ async function run() {
     assert(duplicateCreateResult.success === true && duplicateCreateResult.idempotent === true, '相同 tool_call_id 写操作幂等返回')
     assert(db.prepare('SELECT COUNT(*) AS count FROM tasks').get().count === 1, '幂等命中不会重复创建任务')
 
+    const subtaskCreateResult = await dispatcher.execute({
+      id: 'tool-create-subtasks-1',
+      name: 'batch_create_tasks',
+      args: {
+        tasks: [
+          {
+            title: '整理报告数据',
+            parent_id: createdTask.id,
+            sort_order: 2,
+          },
+          {
+            title: '撰写报告草稿',
+            parent_id: createdTask.id,
+            status: 'completed',
+            sort_order: 1,
+          },
+        ],
+      },
+    }, {
+      sessionId: session.id,
+      messageId: assistantMessage.id,
+    })
+    const subtaskData = subtaskCreateResult.data || {}
+    assert(subtaskCreateResult.success === true && subtaskData.count === 2, 'batch_create_tasks 可创建父任务下的直接子任务')
+
+    const draftTask = db.prepare('SELECT * FROM tasks WHERE title = ?').get('撰写报告草稿')
+    const grandchildCreateResult = await dispatcher.execute({
+      id: 'tool-create-grandchild-1',
+      name: 'create_task',
+      args: {
+        title: '补充执行摘要',
+        parent_id: draftTask.id,
+      },
+    }, {
+      sessionId: session.id,
+      messageId: assistantMessage.id,
+    })
+    assert(grandchildCreateResult.success === true, 'create_task 可创建二级子任务')
+
+    const listSubtasksResult = await dispatcher.execute({
+      id: 'tool-list-subtasks-1',
+      name: 'list_subtasks',
+      args: {
+        taskId: createdTask.id,
+      },
+    }, {
+      sessionId: session.id,
+      messageId: assistantMessage.id,
+    })
+    const listSubtasksData = listSubtasksResult.data || {}
+    const listedSubtasks = Array.isArray(listSubtasksData.tasks) ? listSubtasksData.tasks : []
+    assert(listSubtasksResult.success === true, 'list_subtasks 可查询子任务')
+    assert(listSubtasksData.count === 3, 'list_subtasks 递归返回全部后代子任务', `${listSubtasksData.count || 0} tasks`)
+    assert(listSubtasksData.completed === 1, 'list_subtasks 统计已完成子任务')
+    assert(
+      listedSubtasks.map(task => task.title).join(' > ') === '撰写报告草稿 > 补充执行摘要 > 整理报告数据',
+      'list_subtasks 按 sort_order 和树前序排序',
+      listedSubtasks.map(task => task.title).join(' > ')
+    )
+    assert(
+      listedSubtasks.some(task => task.title === '补充执行摘要' && task.depth === 2 && Array.isArray(task.parent_chain) && task.parent_chain.includes(draftTask.id)),
+      'list_subtasks 返回递归层级和父链'
+    )
+
+    const missingSubtasksResult = await dispatcher.execute({
+      id: 'tool-list-subtasks-missing-1',
+      name: 'list_subtasks',
+      args: {
+        taskId: 999999,
+      },
+    }, {
+      sessionId: session.id,
+      messageId: assistantMessage.id,
+    })
+    assert(missingSubtasksResult.success === false, 'list_subtasks 拒绝不存在的父任务', missingSubtasksResult.error || '')
+
+    const searchTitleResult = await dispatcher.execute({
+      id: 'tool-search-title-1',
+      name: 'search_tasks',
+      args: {
+        query: '季度报告',
+        limit: 10,
+      },
+    }, {
+      sessionId: session.id,
+      messageId: assistantMessage.id,
+    })
+    const searchTitleData = searchTitleResult.data || {}
+    assert(
+      searchTitleResult.success === true && Array.isArray(searchTitleData.tasks) && searchTitleData.tasks.some(task => task.id === createdTask.id),
+      'search_tasks 保持标题匹配能力',
+      `task_id=${createdTask.id}`
+    )
+
+    db.prepare('INSERT INTO image_texts (task_id, image_path, text_content, ocr_status, ocr_timestamp) VALUES (?, ?, ?, ?, ?)')
+      .run(createdTask.id, 'smoke-ocr.png', '图片识别文字 相 关 任 务', 'success', new Date().toISOString())
+    const searchOcrResult = await dispatcher.execute({
+      id: 'tool-search-ocr-1',
+      name: 'search_tasks',
+      args: {
+        query: '相关任务',
+        limit: 10,
+      },
+    }, {
+      sessionId: session.id,
+      messageId: assistantMessage.id,
+    })
+    const searchOcrData = searchOcrResult.data || {}
+    assert(
+      searchOcrResult.success === true && Array.isArray(searchOcrData.tasks) && searchOcrData.tasks.some(task => task.id === createdTask.id),
+      'search_tasks 可找到空格分隔 OCR 文本匹配任务',
+      `task_id=${createdTask.id}`
+    )
+
     const updateResult = await dispatcher.execute({
       id: 'tool-update-1',
       name: 'update_task',
@@ -254,6 +368,7 @@ async function run() {
     })
     assert(deleteResult.success === true, 'delete_task 可删除任务')
     assert(db.prepare('SELECT COUNT(*) AS count FROM tasks WHERE id = ?').get(createdTask.id).count === 0, 'delete_task 删除 tasks 记录')
+    assert(db.prepare('SELECT COUNT(*) AS count FROM tasks WHERE parent_id = ?').get(createdTask.id).count === 0, 'delete_task 同步删除子任务记录')
     assert(db.prepare("SELECT COUNT(*) AS count FROM activity_events WHERE event_type = 'task_deleted' AND task_id = ?").get(createdTask.id).count === 1, 'delete_task 删除后保留 activity_events')
     assert(Number(db.prepare("SELECT value FROM kv_store WHERE key = 'tasks_write_version'").get().value) >= 3, '写操作持续递增 tasks_write_version')
 

@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import type { AgentService } from '../services/agent'
+import type { AgentImageAttachment } from '../services/agentTools'
 import { logger } from '../services/logger'
 
 type AgentHandlersContext = {
@@ -7,7 +8,7 @@ type AgentHandlersContext = {
 }
 
 export function registerAgentHandlers(context: AgentHandlersContext): void {
-  ipcMain.on('agent:chat', (event, payload: { sessionId?: string; message?: string; requestId?: string }) => {
+  ipcMain.on('agent:chat', (event, payload: { sessionId?: string; message?: string; requestId?: string; attachments?: unknown }) => {
     const agentService = context.getAgentService()
     if (!agentService) {
       event.sender.send('agent:stream:error', { requestId: payload?.requestId, error: 'Agent 服务尚未初始化' })
@@ -22,7 +23,9 @@ export function registerAgentHandlers(context: AgentHandlersContext): void {
       return
     }
 
-    void agentService.runChat(sessionId, requestId, message, event.sender).catch(error => {
+    const attachments = validateAttachments(payload.attachments)
+
+    void agentService.runChat(sessionId, requestId, message, event.sender, attachments).catch(error => {
       logger.error('[agent:chat] failed:', error)
       event.sender.send('agent:stream:error', {
         requestId,
@@ -41,5 +44,27 @@ export function registerAgentHandlers(context: AgentHandlersContext): void {
     if (payload?.requestId) {
       context.getAgentService()?.confirmHITL(payload.requestId, Boolean(payload.confirmed))
     }
+  })
+}
+
+function validateAttachments(value: unknown): AgentImageAttachment[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.flatMap(item => {
+    if (!item || typeof item !== 'object') {
+      return []
+    }
+    const attachment = item as Record<string, unknown>
+    if (attachment.kind !== 'image' || typeof attachment.path !== 'string' || !attachment.path.trim()) {
+      return []
+    }
+
+    return [{
+      kind: 'image' as const,
+      path: attachment.path.trim(),
+      name: typeof attachment.name === 'string' && attachment.name.trim() ? attachment.name.trim() : 'image',
+    }]
   })
 }
